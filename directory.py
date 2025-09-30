@@ -2,7 +2,7 @@
 """SQLite directory CRUD for users + public channel metadata."""
 from __future__ import annotations
 import sqlite3, json, os, secrets
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 
 DB_PATH = os.environ.get("SOCP_DB", os.path.join(os.path.dirname(__file__), "socp.db"))
 SCHEMA_PATH = os.environ.get("SOCP_SCHEMA", os.path.join(os.path.dirname(__file__), "schema.sql"))
@@ -55,3 +55,16 @@ def list_public_members() -> List[str]:
     with get_conn() as c:
         rows = c.execute("""SELECT member_id FROM group_members WHERE group_id='public' ORDER BY member_id""").fetchall()
         return [r[0] for r in rows]
+
+def list_public_wraps() -> List[Tuple[str, str]]:
+    with get_conn() as c:
+        rows = c.execute("""SELECT member_id, wrapped_key FROM group_members WHERE group_id='public' ORDER BY member_id""").fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+def ensure_public_member(user_id: str) -> None:
+    with get_conn() as c:
+        c.execute("""INSERT OR IGNORE INTO group_members (group_id, member_id, role) VALUES ('public', ?, 'member')""", (user_id,))
+
+def remove_public_member(user_id: str) -> None:
+    with get_conn() as c:
+        c.execute("""DELETE FROM group_members WHERE group_id='public' AND member_id=?""", (user_id,))

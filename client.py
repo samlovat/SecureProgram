@@ -3,19 +3,25 @@
 SOCP v1.3 Client (educational). Implements:
 - /register, /login, /list, /tell, /all, /file
 - E2EE DM: RSA-OAEP ciphertext + content_sig
-- Public channel: receives PUBLIC_CHANNEL_KEY_SHARE (wrapped AES key), decrypts and caches;
-  /all encrypts plaintext under group key and broadcasts.
+- Public channel: receives channel membership snapshots and RSA-wrapped shares; /all fan-outs
+  RSA-OAEP ciphertexts per recipient (integrity via RSASSA-PSS content signatures).
 - File transfer: sends FILE_START / FILE_CHUNK / FILE_END (DM mode), encrypted per chunk.
-
-Note: For simplicity, AES-GCM(256) is used for the public channel group key.
 """
 from __future__ import annotations
 import argparse, asyncio, websockets, json, shlex, sys, os, math
 from typing import Optional, Dict
-from crypto import b64u, b64u_decode, rsa_oaep_encrypt, rsa_oaep_decrypt, sign_pss_sha256, export_public_spki_b64u, load_public_spki_b64u
+from crypto import (
+    b64u,
+    b64u_decode,
+    rsa_oaep_encrypt,
+    rsa_oaep_decrypt,
+    sign_pss_sha256,
+    verify_pss_sha256,
+    export_public_spki_b64u,
+    load_public_spki_b64u,
+)
 from cli_crypto import generate_and_encrypt, decrypt_private_key
 from utils import now_ms
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 def sha256(data: bytes) -> bytes:
     import hashlib
@@ -32,7 +38,22 @@ class Client:
         # Directory cache
         self.pubkeys: Dict[str, str] = {}  # user_id -> spki b64u
         # Public channel state
-        self.group_key: Optional[bytes] = None  # AES-256 key
+        self.public_members: Dict[str, str] = {}  # member_id -> metadata placeholder
+        self.public_version: int = 0
+
+    def _sign_public_channel(self, ciphertext: bytes, ts: int) -> bytes:
+        assert self.priv is not None
+        data = b"".join([ciphertext, self.user_id.encode(), str(ts).encode()])
+        return sign_pss_sha256(self.priv, data)
+
+    @staticmethod
+    def _verify_public_channel(sender_pub_b64u: str, ciphertext: bytes, content_sig_b64u: str, sender: str, ts: int) -> bool:
+        try:
+            pub = load_public_spki_b64u(sender_pub_b64u)
+            data = b"".join([ciphertext, sender.encode(), str(ts).encode()])
+            return verify_pss_sha256(pub, b64u_decode(content_sig_b64u), data)
+        except Exception:
+            return False
 
     async def connect(self):
         self.ws = await websockets.connect(self.url, ping_interval=15, ping_timeout=20)
@@ -45,18 +66,33 @@ class Client:
             async for raw in self.ws:
                 msg = json.loads(raw)
                 t = msg.get("type")
-                if t == "MSG_DELIVER":
+                if t == "USER_DELIVER":
                     # E2EE DM delivery: decrypt ciphertext with our private key
                     p = msg.get("payload", {})
                     ct = b64u_decode(p.get("ciphertext",""))
                     sender = p.get("sender")
                     sender_pub = p.get("sender_pub")
+                    ts = p.get("ts") or msg.get("ts")
                     if self.priv is None:
                         print("\n[warn] no private key in memory; cannot decrypt DM")
                     else:
                         try:
                             pt = rsa_oaep_decrypt(self.priv, ct)
-                            print(f"\n[DM from {sender}] {pt.decode('utf-8', 'ignore')}")
+                            sig_status = ""
+                            if sender_pub and p.get("content_sig") and self.user_id:
+                                try:
+                                    pub = load_public_spki_b64u(sender_pub)
+                                    tuple_bytes = b"".join([
+                                        ct,
+                                        sender.encode(),
+                                        self.user_id.encode(),
+                                        str(ts).encode(),
+                                    ])
+                                    ok = verify_pss_sha256(pub, b64u_decode(p.get("content_sig", "")), tuple_bytes)
+                                    sig_status = " (sig ok)" if ok else " (sig FAIL)"
+                                except Exception:
+                                    sig_status = " (sig FAIL)"
+                            print(f"\n[DM from {sender}] {pt.decode('utf-8', 'ignore')}{sig_status}")
                         except Exception as e:
                             print(f"\n[DM decrypt error] {e}")
                     print("> ", end="", flush=True)
@@ -66,38 +102,75 @@ class Client:
                     for u in msg.get("users", []):
                         if "pubkey" in u and u["pubkey"]:
                             self.pubkeys[u["user_id"]] = u["pubkey"]
+                            if self.user_id and u["user_id"] == self.user_id and not self.pub_b64u:
+                                self.pub_b64u = u["pubkey"]
                     print(f"\n{msg}")
                     print("> ", end="", flush=True)
 
                 elif t == "PUBLIC_CHANNEL_KEY_SHARE":
-                    # Server sends wrapped group key for public channel
+                    # Track membership hints; actual key material handled by clients via pubkeys.
                     p = msg.get("payload", {})
                     wraps = p.get("shares", [])
                     for w in wraps:
-                        if w.get("member") == self.user_id and self.priv is not None:
-                            wrapped = b64u_decode(w.get("wrapped_public_channel_key",""))
-                            try:
-                                key = rsa_oaep_decrypt(self.priv, wrapped)
-                                self.group_key = key
-                                print("\n[public] group key received & stored")
-                            except Exception as e:
-                                print(f"\n[public] key unwrap failed: {e}")
+                        member = w.get("member")
+                        if member:
+                            self.public_members.setdefault(member, "")
                     print("> ", end="", flush=True)
 
-                elif t == "MSG_PUBLIC_CHANNEL_DELIVER":
-                    # Public channel ciphertext under AES-GCM; decrypt
+                elif t == "PUBLIC_CHANNEL_SNAPSHOT":
+                    snap = msg.get("payload", {})
+                    members = snap.get("members", [])
+                    self.public_version = snap.get("version", self.public_version)
+                    self.public_members = {m: self.public_members.get(m, "") for m in members}
+                    print(f"\n[public] membership v{self.public_version}: {members}")
+                    print("> ", end="", flush=True)
+
+                elif t in ("MSG_PUBLIC_CHANNEL", "MSG_PUBLIC_CHANNEL_DELIVER"):
                     p = msg.get("payload", {})
-                    if self.group_key is None:
-                        print("\n[public] no group key; cannot decrypt")
-                        print("> ", end="", flush=True); continue
+                    ciphertext_b64u = p.get("ciphertext", "")
+                    sender = p.get("sender")
+                    sender_pub = p.get("sender_pub")
+                    ts = p.get("ts") or msg.get("ts")
                     try:
-                        nonce = b64u_decode(p["nonce"])
-                        ct = b64u_decode(p["ciphertext"])
-                        aes = AESGCM(self.group_key)
-                        pt = aes.decrypt(nonce, ct, None)
-                        print(f"\n[public] {pt.decode('utf-8','ignore')}")
+                        ct = b64u_decode(ciphertext_b64u)
+                        if self.priv is None:
+                            raise ValueError("no private key loaded")
+                        pt = rsa_oaep_decrypt(self.priv, ct)
+                        verified = False
+                        if sender_pub and p.get("content_sig"):
+                            verified = self._verify_public_channel(sender_pub, ct, p.get("content_sig", ""), sender, ts)
+                        prefix = "[public]"
+                        body = pt.decode("utf-8", "ignore")
+                        status = " (sig ok)" if verified else " (sig FAIL)"
+                        print(f"\n{prefix} {sender}: {body}{status}")
                     except Exception as e:
                         print(f"\n[public decrypt error] {e}")
+                    print("> ", end="", flush=True)
+
+                elif t == "USER_LOGGED_IN":
+                    payload = msg.get("payload", {})
+                    self.user_id = payload.get("user_id", self.user_id)
+                    blob = payload.get("privkey_store")
+                    if blob and self.password:
+                        try:
+                            self.priv = decrypt_private_key(blob, self.password)
+                            self.pub_b64u = export_public_spki_b64u(self.priv)
+                            if self.user_id:
+                                self.pubkeys[self.user_id] = self.pub_b64u
+                            print(f"\n[login] unlocked key for {self.user_id}")
+                        except Exception as e:
+                            print(f"\n[login] private key decrypt failed: {e}")
+                    print("> ", end="", flush=True)
+
+                elif t == "USER_HELLO_ACK":
+                    print("\n[server] hello acknowledged")
+                    print("> ", end="", flush=True)
+
+                elif t == "ERROR":
+                    payload = msg.get("payload", {})
+                    code = payload.get("code", "ERROR")
+                    detail = payload.get("detail", "")
+                    print(f"\n[error] {code} {detail}".rstrip())
                     print("> ", end="", flush=True)
 
                 else:
@@ -117,6 +190,17 @@ class Client:
     async def cmd_login(self, user: str, password: str):
         # Request login; server returns your encrypted private key blob so you can decrypt locally
         self.user_id, self.password = user, password
+        hello_payload = {"client": "cli-v1"}
+        if self.pub_b64u:
+            hello_payload["pubkey"] = self.pub_b64u
+            hello_payload["enc_pubkey"] = self.pub_b64u
+        await self.send({
+            "type": "USER_HELLO",
+            "from": user,
+            "to": "",
+            "ts": now_ms(),
+            "payload": hello_payload,
+        })
         await self.send({"type":"USER_LOGIN","ts":now_ms(),"payload":{"user_id":user,"password":password}})
 
     async def cmd_list(self):
@@ -128,6 +212,10 @@ class Client:
             print("login first"); return
         if to not in self.pubkeys:
             print("unknown recipient pubkey; try /list"); return
+        if not self.pub_b64u and self.user_id in self.pubkeys:
+            self.pub_b64u = self.pubkeys[self.user_id]
+        if not self.pub_b64u:
+            print("missing own pubkey; try /list"); return
         pub = load_public_spki_b64u(self.pubkeys[to])
         ts = now_ms()
         ct = rsa_oaep_encrypt(pub, text.encode("utf-8"))
@@ -146,16 +234,46 @@ class Client:
         })
 
     async def cmd_all(self, text: str):
-        # Public channel broadcast: AES-GCM under group key provided by server
-        if self.group_key is None:
-            print("no public channel key yet; wait for PUBLIC_CHANNEL_KEY_SHARE"); return
-        aes = AESGCM(self.group_key)
-        nonce = os.urandom(12)
-        ct = aes.encrypt(nonce, text.encode("utf-8"), None)
-        await self.send({
-            "type":"MSG_PUBLIC_CHANNEL","ts":now_ms(),
-            "payload":{"nonce": b64u(nonce), "ciphertext": b64u(ct)}
-        })
+        if not self.user_id or not self.priv:
+            print("login first"); return
+        if not self.pub_b64u and self.user_id in self.pubkeys:
+            self.pub_b64u = self.pubkeys[self.user_id]
+        if not self.pub_b64u:
+            print("missing own pubkey; try /list"); return
+        ts = now_ms()
+        plaintext = text.encode("utf-8")
+        members = set(self.public_members.keys())
+        if not members:
+            members = {uid for uid in self.pubkeys if uid != self.user_id}
+        sent = 0
+        for member in sorted(members):
+            if member == self.user_id:
+                continue
+            if member not in self.pubkeys:
+                print(f"skipping {member}: unknown pubkey (try /list)")
+                continue
+            try:
+                pub = load_public_spki_b64u(self.pubkeys[member])
+                ct = rsa_oaep_encrypt(pub, plaintext)
+            except Exception as e:
+                print(f"failed to encrypt for {member}: {e}")
+                continue
+            sig = self._sign_public_channel(ct, ts)
+            payload = {
+                "ciphertext": b64u(ct),
+                "sender_pub": self.pub_b64u,
+                "content_sig": b64u(sig)
+            }
+            await self.send({
+                "type": "MSG_PUBLIC_CHANNEL",
+                "from": self.user_id,
+                "to": member,
+                "ts": ts,
+                "payload": payload
+            })
+            sent += 1
+        if not sent:
+            print("no recipients for broadcast")
 
     async def cmd_file(self, to: str, path: str, chunk_size=32*1024):
         if to not in self.pubkeys:
@@ -164,9 +282,18 @@ class Client:
         if not os.path.exists(path):
             print(f"file not found: {path}"); return
         size = os.path.getsize(path)
+        import hashlib
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            while True:
+                buf = fh.read(65536)
+                if not buf:
+                    break
+                h.update(buf)
+        digest_hex = h.hexdigest()
         file_id = f"file-{now_ms()}"
         await self.send({"type":"FILE_START","ts":now_ms(),
-                         "payload":{"file_id":file_id,"name":os.path.basename(path),"size":size,"sha256":"","mode":"dm","to":to}})
+                         "payload":{"file_id":file_id,"name":os.path.basename(path),"size":size,"sha256":digest_hex,"mode":"dm","to":to}})
         idx = 0
         with open(path, "rb") as f:
             while True:

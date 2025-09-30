@@ -1,3 +1,10 @@
 
 listen_host: "127.0.0.1"
 listen_port: 8765
+introducers:
+  - url: "ws://127.0.0.1:8765"
+    pubkey: ""
+  - url: "ws://127.0.0.1:8766"
+    pubkey: ""
+  - url: "ws://127.0.0.1:8767"
+    pubkey: ""
