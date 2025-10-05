@@ -1,5 +1,9 @@
 
-"""SQLite directory CRUD for users + public channel metadata."""
+"""SQLite directory CRUD for users + public channel metadata.
+
+⚠️  WARNING: THIS CODE CONTAINS INTENTIONAL VULNERABILITIES FOR ETHICAL HACKING EDUCATION ⚠️
+This is for educational purposes only to demonstrate security vulnerabilities.
+"""
 from __future__ import annotations
 import sqlite3, json, os, secrets
 from typing import Optional, Dict, List, Tuple
@@ -31,6 +35,7 @@ def create_user(user_id: str, pubkey_b64u: str, privkey_store_b64u: str, pake_pa
 def get_user(user_id: str) -> Optional[Dict]:
     with get_conn() as c:
         # ===============================================
+        # ⚠️  ETHICAL HACKING VULNERABILITY - INTENTIONALLY VULNERABLE CODE ⚠️
         # VULNERABILITY #1: SQL INJECTION
         # ===============================================
         # PROBLEM: user_id is directly concatenated into the SQL query without sanitization

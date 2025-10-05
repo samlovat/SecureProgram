@@ -1,6 +1,10 @@
 
 """SOCP v1.3 educational server with spec-required features in compact form.
 
+⚠️  WARNING: THIS CODE CONTAINS INTENTIONAL VULNERABILITIES FOR ETHICAL HACKING EDUCATION ⚠️
+This version has been modified to include intentional security vulnerabilities:
+This is for educational purposes only to demonstrate security vulnerabilities.
+
 - WebSocket server that accepts both Users and Servers.
 - Bootstrap: HELLO_JOIN/WELCOME/ANNOUNCE (localhost demo uses CLI args to simplify introducer).
 - Presence Gossip: USER_ADVERTISE / USER_REMOVE
@@ -522,6 +526,7 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                     await send_error_frame(ws, priv, this_sid, uid, "BAD_KEY", "HELLO pubkey mismatch")
                     continue
                 # ===============================================
+                # ⚠️  ETHICAL HACKING VULNERABILITY - INTENTIONALLY VULNERABLE CODE ⚠️
                 # VULNERABILITY #3: TIMING ATTACK
                 # ===============================================
                 # PROBLEM: Different response times for valid vs invalid users

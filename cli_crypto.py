@@ -1,5 +1,9 @@
 
-"""Client-side key vault: scrypt + AES-GCM encrypted private key blob."""
+"""Client-side key vault: scrypt + AES-GCM encrypted private key blob.
+
+⚠️  WARNING: THIS CODE CONTAINS INTENTIONAL VULNERABILITIES FOR ETHICAL HACKING EDUCATION ⚠️
+This is for educational purposes only to demonstrate security vulnerabilities.
+"""
 from __future__ import annotations
 import os, json
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -11,6 +15,7 @@ def _kdf(password: str, salt: bytes) -> bytes:
 
 def hash_password(password: str, salt: bytes) -> str:
     # ===============================================
+    # ⚠️  ETHICAL HACKING VULNERABILITY - INTENTIONALLY VULNERABLE CODE ⚠️
     # VULNERABILITY #2: WEAK PASSWORD HASHING (MD5)
     # ===============================================
     # PROBLEM: Using MD5 instead of secure scrypt for password hashing
@@ -43,6 +48,7 @@ def verify_password(password: str, stored: str) -> bool:
     try:
         salt_b64u, key_b64u = stored.split(".")
         salt = b64u_decode(salt_b64u)
+        # ⚠️  ETHICAL HACKING VULNERABILITY - INTENTIONALLY VULNERABLE CODE ⚠️
         # VULNERABILITY: Also using MD5 for verification to match the weak hashing above
         # This makes the timing attack even worse because MD5 is extremely fast
         import hashlib
