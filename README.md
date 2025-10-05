@@ -46,7 +46,7 @@ This repo implements the **required** features of SOCP v1.3 in a compact, heavil
    Stop each server after it prints the listening banner (`Ctrl+C`). Extract the base64url public key from each key file:
 
    ```bash
-   jq -r '.pub_spki_b64u' server_key_srv-a.json  # repeat for b/c
+   python -c "import json; print(json.load(open('server_key_srv-a.json'))['pub_spki_b64u'])"  # repeat for b/c
    ```
 
 3. **Populate introducer pins** – run the helper to inject the pubkeys and show ready-to-use bootstrap strings:

@@ -107,6 +107,25 @@ class Client:
                     print(f"\n{msg}")
                     print("> ", end="", flush=True)
 
+                elif t == "USER_ADDED":
+                    # Automatically update client's pubkey cache when new user joins
+                    payload = msg.get("payload", {})
+                    user_id = payload.get("user_id")
+                    pubkey = payload.get("pubkey")
+                    if user_id and pubkey:
+                        self.pubkeys[user_id] = pubkey
+                        print(f"\n[user added] {user_id} is now available for messaging")
+                    print("> ", end="", flush=True)
+
+                elif t == "USER_REMOVED":
+                    # Automatically remove user from client's pubkey cache when user leaves
+                    payload = msg.get("payload", {})
+                    user_id = payload.get("user_id")
+                    if user_id and user_id in self.pubkeys:
+                        del self.pubkeys[user_id]
+                        print(f"\n[user removed] {user_id} is no longer available")
+                    print("> ", end="", flush=True)
+
                 elif t == "PUBLIC_CHANNEL_KEY_SHARE":
                     # Track membership hints; actual key material handled by clients via pubkeys.
                     p = msg.get("payload", {})
@@ -242,13 +261,18 @@ class Client:
             print("missing own pubkey; try /list"); return
         ts = now_ms()
         plaintext = text.encode("utf-8")
-        members = set(self.public_members.keys())
-        if not members:
-            members = {uid for uid in self.pubkeys if uid != self.user_id}
+        
+        # For /all command, send to all known users (excluding self)
+        # Don't use public_members as it represents who is IN the channel, not who should RECEIVE
+        members = {uid for uid in self.pubkeys if uid != self.user_id}
+        
+        # Debug: show what members we're trying to send to
+        print(f"[debug] attempting to send to members: {sorted(members)}")
+        print(f"[debug] available pubkeys: {list(self.pubkeys.keys())}")
+        print(f"[debug] self.user_id: {self.user_id}")
+        
         sent = 0
         for member in sorted(members):
-            if member == self.user_id:
-                continue
             if member not in self.pubkeys:
                 print(f"skipping {member}: unknown pubkey (try /list)")
                 continue
@@ -322,6 +346,7 @@ async def repl(url: str):
         if line.startswith("/"):
             parts = shlex.split(line)
             cmd = parts[0][1:]
+            print(f"[debug] parsed command: {cmd}, parts: {parts}")  # Debug output
             try:
                 if cmd == "register":
                     _, user, password = parts
@@ -338,6 +363,9 @@ async def repl(url: str):
                     _, *rest = parts
                     await c.cmd_all(" ".join(rest))
                 elif cmd == "file":
+                    if len(parts) < 3:
+                        print("usage: /file <user> <path>")
+                        continue
                     _, to, path = parts
                     await c.cmd_file(to, path)
                 else:

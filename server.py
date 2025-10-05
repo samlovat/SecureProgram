@@ -236,8 +236,21 @@ async def handle_server_frame(ws: WebSocketServerProtocol, server_id: str, obj: 
             register_server_peer(frm, ws, host, int(port), pub)
 
     elif t == "USER_ADVERTISE":
-        uid = p.get("user_id"); sid = p.get("server_id")
+        uid = p.get("user_id"); sid = p.get("server_id"); pubkey = p.get("pubkey", "")
         user_locations[uid] = sid
+        
+        # Store the public key for cross-server messaging
+        if pubkey:
+            # Create a temporary user entry for cross-server users
+            # This allows /list to show users from other servers with their public keys
+            global user_pubkeys
+            if 'user_pubkeys' not in globals():
+                user_pubkeys = {}
+            user_pubkeys[uid] = pubkey
+            
+            # Notify all local clients about the new user (this is the key fix!)
+            await notify_clients_user_added(priv, this_sid, uid, pubkey)
+        
         # gossip onward
         bcast_servers(obj, exclude=frm)
 
@@ -246,6 +259,9 @@ async def handle_server_frame(ws: WebSocketServerProtocol, server_id: str, obj: 
         if user_locations.get(uid) == sid:
             user_locations.pop(uid, None)
             remove_public_member(uid)
+            
+            # Notify all local clients about the removed user
+            await notify_clients_user_removed(priv, this_sid, uid)
         bcast_servers(obj, exclude=frm)
 
     elif t == "SERVER_DELIVER":
@@ -315,8 +331,51 @@ async def handle_server_frame(ws: WebSocketServerProtocol, server_id: str, obj: 
                 await servers[dest_sid].send(json.dumps(obj))
 
 # ------------------ User handlers ------------------
+async def notify_clients_user_added(priv, this_sid: str, uid: str, pubkey: str):
+    """Notify all local clients when a new user is added to the mesh network."""
+    for client_ws in presence_local.values():
+        try:
+            await send_user_frame(client_ws, priv, this_sid, "", "USER_ADDED", {
+                "user_id": uid,
+                "pubkey": pubkey,
+                "online_local": False
+            })
+        except Exception:
+            pass  # Client might have disconnected
+
+async def notify_clients_user_removed(priv, this_sid: str, uid: str):
+    """Notify all local clients when a user is removed from the mesh network."""
+    for client_ws in presence_local.values():
+        try:
+            await send_user_frame(client_ws, priv, this_sid, "", "USER_REMOVED", {
+                "user_id": uid
+            })
+        except Exception:
+            pass  # Client might have disconnected
+
+async def send_initial_directory_sync(ws, priv, this_sid: str):
+    """Send initial directory sync to a newly logged-in user."""
+    global user_pubkeys
+    if 'user_pubkeys' not in globals():
+        user_pubkeys = {}
+    
+    # Send USER_ADDED messages for all known users from other servers
+    for uid, pubkey in user_pubkeys.items():
+        try:
+            await send_user_frame(ws, priv, this_sid, "", "USER_ADDED", {
+                "user_id": uid,
+                "pubkey": pubkey,
+                "online_local": False
+            })
+        except Exception:
+            pass  # Client might have disconnected
+
 async def advertise_user(priv, this_sid: str, uid: str):
-    payload = {"user_id": uid, "server_id": this_sid, "meta": {}}
+    # Get user's public key for sharing
+    rec = get_user(uid)
+    pubkey = rec.get("pubkey", "") if rec else ""
+    
+    payload = {"user_id": uid, "server_id": this_sid, "pubkey": pubkey, "meta": {}}
     frame = {"type":"USER_ADVERTISE","from":this_sid,"to":"*","ts":now_ms(),"payload":payload}
     frame["sig"] = transport_sign(priv, payload)
     bcast_servers(frame)
@@ -474,12 +533,33 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                 PUBLIC_VERSION += 1
                 broadcast_public_channel_updated(priv, this_sid)
                 await advertise_user(priv, this_sid, uid)
+                
+                # Send initial directory sync to the newly logged-in user
+                await send_initial_directory_sync(ws, priv, this_sid)
+                
                 await send_user_frame(ws, priv, this_sid, uid, "PUBLIC_CHANNEL_SNAPSHOT", {"version": PUBLIC_VERSION, "members": list_public_members()})
 
             elif typ == "LIST_REQUEST":
+                # Get local users
                 users = list_users()
                 for u in users:
                     u["online_local"] = (u["user_id"] in presence_local)
+                
+                # Add users from other servers (from user_locations)
+                global user_pubkeys
+                if 'user_pubkeys' not in globals():
+                    user_pubkeys = {}
+                    
+                for uid, server_id in user_locations.items():
+                    if server_id != "local" and server_id != this_sid:
+                        # Check if user is already in the list
+                        if not any(u["user_id"] == uid for u in users):
+                            users.append({
+                                "user_id": uid,
+                                "pubkey": user_pubkeys.get(uid, ""),  # Use stored public key
+                                "online_local": False
+                            })
+                
                 await send_user_frame(ws, priv, this_sid, user_id or "", "LIST_RESPONSE", {"users": users})
 
             elif typ == "MSG_DIRECT":
@@ -651,6 +731,27 @@ async def connect_to_peer(url: str, expected_pubkey: str, this_sid: str, priv, l
     except Exception as e:
         print(f"[bootstrap] failed to connect {url}: {e}")
 
+
+async def connect_to_peer_with_retry(url: str, expected_pubkey: str, this_sid: str, priv, loop):
+    """Establish a server↔server connection with automatic retry."""
+    max_retries = 10
+    retry_delay = 5  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"[bootstrap] attempting to connect to {url} (attempt {attempt + 1}/{max_retries})")
+            await connect_to_peer(url, expected_pubkey, this_sid, priv, loop)
+            print(f"[bootstrap] successfully connected to {url}")
+            return  # Success! Exit the retry loop
+            
+        except Exception as e:
+            print(f"[bootstrap] failed to connect {url} (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:  # Don't sleep on the last attempt
+                print(f"[bootstrap] retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+            else:
+                print(f"[bootstrap] giving up on {url} after {max_retries} attempts")
+
 async def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
@@ -702,11 +803,11 @@ async def main():
 
     async with websockets.serve(lambda ws: handle_socket(ws, server_priv, args.server_id),
                                 args.host, args.port, ping_interval=15, ping_timeout=20):
-        # Bootstrap to peers
+        # Bootstrap to peers with retry
         for url, pub in bootstrap_pins.items():
             if url.rstrip("/") == f"ws://{SERVER_HOST}:{SERVER_PORT}":
                 continue
-            loop.create_task(connect_to_peer(url, pub, args.server_id, server_priv, loop))
+            loop.create_task(connect_to_peer_with_retry(url, pub, args.server_id, server_priv, loop))
         # Heartbeats
         loop.create_task(heartbeat_task(args.server_id, server_priv))
         await asyncio.Future()
