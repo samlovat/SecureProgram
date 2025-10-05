@@ -521,7 +521,38 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                 if hello_pubkey and hello_pubkey != rec["pubkey"]:
                     await send_error_frame(ws, priv, this_sid, uid, "BAD_KEY", "HELLO pubkey mismatch")
                     continue
+                # ===============================================
+                # VULNERABILITY #3: TIMING ATTACK
+                # ===============================================
+                # PROBLEM: Different response times for valid vs invalid users
+                # This allows attackers to enumerate valid usernames by measuring response times
+                #
+                # HOW THE TIMING ATTACK WORKS:
+                # 1. Valid user + wrong password: Server does password verification (fast) + 100ms delay
+                # 2. Invalid user: Server returns immediately (no password verification)
+                # 3. Attacker measures response times to distinguish between the two cases
+                #
+                # EXPLOITATION PROCESS:
+                # 1. Try login with username "alice" and wrong password
+                # 2. Measure response time (e.g., 150ms = valid user)
+                # 3. Try login with username "bob" and wrong password  
+                # 4. Measure response time (e.g., 50ms = invalid user)
+                # 5. Repeat for all possible usernames to build a list of valid users
+                #
+                # WHY THIS IS DANGEROUS:
+                # - Reveals which usernames exist in the system
+                # - Helps attackers focus their brute force attacks on valid accounts
+                # - Can be automated with scripts to enumerate all users
+                #
+                # SECURE FIX: Always perform the same operations regardless of user validity:
+                # - Always hash the password (even for invalid users)
+                # - Use constant-time string comparison
+                # - Add random delays to mask timing differences
+                # ===============================================
                 if not verify_password(pw, rec["pake_password"]):
+                    # Add artificial delay to make timing differences more obvious
+                    import time
+                    time.sleep(0.1)  # 100ms delay for failed password attempts
                     await send_error_frame(ws, priv, this_sid, uid, "BAD_KEY", "password invalid")
                     continue
                 presence_local[uid] = ws; user_locations[uid] = "local"; user_id = uid

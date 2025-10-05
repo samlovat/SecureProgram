@@ -30,8 +30,29 @@ def create_user(user_id: str, pubkey_b64u: str, privkey_store_b64u: str, pake_pa
 
 def get_user(user_id: str) -> Optional[Dict]:
     with get_conn() as c:
-        row = c.execute("""SELECT user_id, pubkey, privkey_store, pake_password, meta, version FROM users WHERE user_id=?""",
-                        (user_id,)).fetchone()
+        # ===============================================
+        # VULNERABILITY #1: SQL INJECTION
+        # ===============================================
+        # PROBLEM: user_id is directly concatenated into the SQL query without sanitization
+        # This creates a classic SQL injection vulnerability
+        #
+        # HOW IT WORKS:
+        # - Normal input: user_id = "alice" 
+        #   → Query: SELECT ... WHERE user_id='alice'
+        # - Malicious input: user_id = "admin' OR '1'='1' --"
+        #   → Query: SELECT ... WHERE user_id='admin' OR '1'='1' --'
+        #   → This returns ALL users because '1'='1' is always true
+        #
+        # EXPLOITATION EXAMPLES:
+        # 1. Bypass authentication: "admin' OR '1'='1' --"
+        # 2. Extract all data: "x' UNION SELECT user_id, pubkey, privkey_store, pake_password, meta, version FROM users --"
+        # 3. Drop tables: "x'; DROP TABLE users; --"
+        #
+        # SECURE FIX: Use parameterized queries like the original code:
+        # row = c.execute("SELECT ... WHERE user_id=?", (user_id,)).fetchone()
+        # ===============================================
+        query = f"SELECT user_id, pubkey, privkey_store, pake_password, meta, version FROM users WHERE user_id='{user_id}'"
+        row = c.execute(query).fetchone()
         if not row: return None
         return {"user_id": row[0], "pubkey": row[1], "privkey_store": row[2], "pake_password": row[3], "meta": row[4], "version": row[5]}
 
