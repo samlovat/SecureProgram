@@ -14,47 +14,6 @@ This repo implements the **required** features of SOCP v1.3 in a compact, heavil
 
 > This is an instructional reference. It favours clarity over performance.
 
-## Quick Setup
-
-### 1. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Generate Server Keys and Databases
-```bash
-python setup_servers.py
-```
-
-### 3. Start Servers
-```bash
-# Terminal 1
-python server.py --server-id srv-a --port 8765
-
-# Terminal 2  
-python server.py --server-id srv-b --port 8766
-
-# Terminal 3
-python server.py --server-id srv-c --port 8767
-```
-
-### 4. Extract Public Keys
-```bash
-# For each server, extract the public key:
-python -c "import json; print(json.load(open('server_key_srv-a.json'))['pub_spki_b64u'])"
-python -c "import json; print(json.load(open('server_key_srv-b.json'))['pub_spki_b64u'])"
-python -c "import json; print(json.load(open('server_key_srv-c.json'))['pub_spki_b64u'])"
-```
-
-### 5. Update config.yaml
-Replace the `introducers` section with your extracted public keys.
-
-### 6. Test the System
-```bash
-# Start clients and test messaging
-python client.py --url ws://127.0.0.1:8765
-```
-
 ## Contact Details of Group Members if Required:
 - Tony Le <tony.le@student.adelaide.edu.au>
 - Sam Lovat <samuel.lovat@student.adelaide.edu.au>
