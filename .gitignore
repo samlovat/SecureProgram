@@ -1,6 +1,7 @@
 # SOCP Server Files - Generated during setup
 server_key_srv-*.json
-socp.db
+socp*.db
+debug.log
 
 # Python
 __pycache__/
@@ -25,6 +26,7 @@ wheels/
 *.egg
 
 # Virtual Environment
+.venv/
 venv/
 env/
 ENV/
