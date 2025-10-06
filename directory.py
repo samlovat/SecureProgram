@@ -34,7 +34,6 @@ def create_user(user_id: str, pubkey_b64u: str, privkey_store_b64u: str, pake_pa
 
 def get_user(user_id: str) -> Optional[Dict]:
     with get_conn() as c:
-        # VULNERABLE
         query = f"SELECT user_id, pubkey, privkey_store, pake_password, meta, version FROM users WHERE user_id='{user_id}'"
         row = c.execute(query).fetchone()
         if not row: return None

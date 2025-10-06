@@ -524,7 +524,6 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                 if hello_pubkey and hello_pubkey != rec["pubkey"]:
                     await send_error_frame(ws, priv, this_sid, uid, "BAD_KEY", "HELLO pubkey mismatch")
                     continue
-                # VULNERABLE
                 if not verify_password(pw, rec["pake_password"]):
                     import time
                     time.sleep(0.1)  # 100ms delay for failed password attempts
