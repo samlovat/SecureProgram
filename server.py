@@ -1,6 +1,9 @@
 
 """SOCP v1.3 educational server with spec-required features in compact form.
 
+⚠️  WARNING: THIS FILE CONTAINS INTENTIONAL VULNERABILITIES FOR ETHICAL HACKING EDUCATION ⚠️
+This is for educational purposes only to demonstrate security vulnerabilities.
+
 - WebSocket server that accepts both Users and Servers.
 - Bootstrap: HELLO_JOIN/WELCOME/ANNOUNCE (localhost demo uses CLI args to simplify introducer).
 - Presence Gossip: USER_ADVERTISE / USER_REMOVE
@@ -523,7 +526,6 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                     continue
                 # VULNERABLE
                 if not verify_password(pw, rec["pake_password"]):
-                    # Add artificial delay to make timing differences more obvious
                     import time
                     time.sleep(0.1)  # 100ms delay for failed password attempts
                     await send_error_frame(ws, priv, this_sid, uid, "BAD_KEY", "password invalid")

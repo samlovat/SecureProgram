@@ -1,5 +1,9 @@
 
-"""Client-side key vault: scrypt + AES-GCM encrypted private key blob."""
+"""Client-side key vault: scrypt + AES-GCM encrypted private key blob.
+
+⚠️  WARNING: THIS FILE CONTAINS INTENTIONAL VULNERABILITIES FOR ETHICAL HACKING EDUCATION ⚠️
+This is for educational purposes only to demonstrate security vulnerabilities.
+"""
 from __future__ import annotations
 import os, json
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt

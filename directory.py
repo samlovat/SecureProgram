@@ -1,5 +1,9 @@
 
-"""SQLite directory CRUD for users + public channel metadata."""
+"""SQLite directory CRUD for users + public channel metadata.
+
+⚠️  WARNING: THIS FILE CONTAINS INTENTIONAL VULNERABILITIES FOR ETHICAL HACKING EDUCATION ⚠️
+This is for educational purposes only to demonstrate security vulnerabilities.
+"""
 from __future__ import annotations
 import sqlite3, json, os, secrets
 from typing import Optional, Dict, List, Tuple
