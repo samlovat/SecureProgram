@@ -16,14 +16,16 @@ This repository has been modified to include 3 intentional security vulnerabilit
 - **Type:** Input Validation / Database Security
 - **Description:** User input is directly concatenated into SQL queries without sanitization
 - **Impact:** Database compromise, data extraction, authentication bypass
-- **Exploitation:** Inject SQL commands like `admin' OR '1'='1' --`
+- **Exploitation:** Boolean-based blind injection using error message differences
+- **Success Rate:** **100% - All 7 user password hashes successfully extracted**
 
 ### **2. Weak Password Hashing (MD5)**
 - **File:** `cli_crypto.py` - `hash_password()` and `verify_password()` functions
 - **Type:** Cryptographic Security / Password Security
-- **Description:** Uses broken MD5 hashing instead of secure scrypt
-- **Impact:** Password cracking, account takeover
-- **Exploitation:** Brute force attacks, rainbow table lookups
+- **Description:** Uses broken MD5 hashing instead of secure scrypt **AND ignores salt completely**
+- **Impact:** Password cracking, account takeover, rainbow table attacks
+- **Exploitation:** Extract hashes via SQL injection, crack with MD5 brute force (billions/second)
+- **Critical Flaw:** `hashlib.md5(password.encode("utf-8"))` - salt parameter completely ignored!
 
 ### **3. Timing Attack Vulnerability**
 - **File:** `server.py` - `USER_LOGIN` handler
@@ -57,10 +59,41 @@ Look for these specific patterns in the code:
 ### **Exploitation Scripts**
 Use the provided exploitation scripts to test the vulnerabilities:
 
+**Working Exploits:**
 - `timing_attack_example.py` - Demonstrates username enumeration
-- `sql_injection_exploit.py` - Shows database extraction techniques  
-- `md5_cracking_exploit.py` - Demonstrates password cracking
+- `blind_sql_injection.py` - **Working** blind SQL injection using boolean-based technique
+- `extract_all_hashes.py` - **Complete** password hash extraction from all users
+- `crack_all_hashes.py` - **Successful** MD5 password cracking (6/7 passwords cracked)
+
+**Educational Examples:**
+- `sql_injection_exploit.py` - Shows UNION-based SQL injection theory (limited by app logic)
 - `complete_attack_chain.py` - Chains all vulnerabilities together
+
+---
+
+## 🎯 **Successful Exploitation Results**
+
+### **Complete Attack Chain Executed:**
+1. **Timing Attack** → Identified valid usernames: `admin`, `alice`
+2. **SQL Injection** → Extracted all 7 user password hashes via blind boolean-based injection
+3. **MD5 Cracking** → Successfully cracked 6/7 passwords in 0.001 seconds
+
+### **Compromised Accounts:**
+```
+testuser1 : password
+testuser2 : admin  
+testuser3 : 123456
+testuser4 : alice
+testuser5 : qwerty
+admin     : test
+alice     : [password not in wordlist]
+```
+
+### **Attack Effectiveness:**
+- **SQL Injection Success Rate:** 100% (7/7 hashes extracted)
+- **Password Cracking Success Rate:** 85.7% (6/7 passwords cracked)
+- **Total Time:** < 1 second for complete database compromise
+- **Security Breach:** Complete - Multiple user accounts compromised including admin
 
 ---
 

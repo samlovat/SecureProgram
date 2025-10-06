@@ -52,7 +52,7 @@ This repo implements the **required** features of SOCP v1.3 in a compact, heavil
 3. **Populate introducer pins** – run the helper to inject the pubkeys and show ready-to-use bootstrap strings:
 
    ```bash
-   python tools/update_pins.py --config config.yaml \
+   python3 tools/update_pins.py --config config.yaml \
      --key ws://127.0.0.1:8765=server_key_srv-a.json \
      --key ws://127.0.0.1:8766=server_key_srv-b.json \
      --key ws://127.0.0.1:8767=server_key_srv-c.json
