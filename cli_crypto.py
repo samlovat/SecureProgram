@@ -1,9 +1,5 @@
 
-"""Client-side key vault: scrypt + AES-GCM encrypted private key blob.
-
-⚠️  WARNING: THIS CODE CONTAINS INTENTIONAL VULNERABILITIES FOR ETHICAL HACKING EDUCATION ⚠️
-This is for educational purposes only to demonstrate security vulnerabilities.
-"""
+"""Client-side key vault: scrypt + AES-GCM encrypted private key blob."""
 from __future__ import annotations
 import os, json
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -14,32 +10,7 @@ def _kdf(password: str, salt: bytes) -> bytes:
     return Scrypt(salt=salt, length=32, n=2**14, r=8, p=1).derive(password.encode("utf-8"))
 
 def hash_password(password: str, salt: bytes) -> str:
-    # ===============================================
-    # ⚠️  ETHICAL HACKING VULNERABILITY - INTENTIONALLY VULNERABLE CODE ⚠️
-    # VULNERABILITY #2: WEAK PASSWORD HASHING (MD5)
-    # ===============================================
-    # PROBLEM: Using MD5 instead of secure scrypt for password hashing
-    # MD5 is cryptographically broken and extremely fast to compute
-    #
-    # WHY MD5 IS DANGEROUS:
-    # 1. MD5 is vulnerable to collision attacks (two different inputs produce same hash)
-    # 2. MD5 is extremely fast (billions of hashes per second on modern hardware)
-    # 3. Rainbow tables exist for common passwords
-    # 4. No salt is effectively used (salt is ignored in MD5 computation)
-    #
-    # HOW TO EXPLOIT:
-    # 1. Extract password hashes from database
-    # 2. Use tools like hashcat or john the ripper to crack MD5 hashes
-    # 3. For "password123": MD5 = 482c811da5d5b4bc6d497ffa98491e38
-    # 4. Look up in online MD5 databases (rainbow tables)
-    #
-    # EXAMPLE CRACKING SPEEDS:
-    # - MD5: ~8 billion hashes/second on GPU
-    # - Scrypt: ~1000 hashes/second (much slower, designed to be slow)
-    #
-    # SECURE FIX: Use the original scrypt implementation:
-    # k = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1).derive(password.encode("utf-8"))
-    # ===============================================
+    # VULNERABLE
     import hashlib
     k = hashlib.md5(password.encode("utf-8")).digest()  # VULNERABLE: MD5 is broken!
     return f"{b64u(salt)}.{b64u(k)}"
@@ -48,9 +19,7 @@ def verify_password(password: str, stored: str) -> bool:
     try:
         salt_b64u, key_b64u = stored.split(".")
         salt = b64u_decode(salt_b64u)
-        # ⚠️  ETHICAL HACKING VULNERABILITY - INTENTIONALLY VULNERABLE CODE ⚠️
-        # VULNERABILITY: Also using MD5 for verification to match the weak hashing above
-        # This makes the timing attack even worse because MD5 is extremely fast
+        # VULNERABLE
         import hashlib
         computed_hash = hashlib.md5(password.encode("utf-8")).digest()  # VULNERABLE: MD5!
         stored_hash = b64u_decode(key_b64u)
