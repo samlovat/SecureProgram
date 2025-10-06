@@ -14,18 +14,16 @@ def _kdf(password: str, salt: bytes) -> bytes:
     return Scrypt(salt=salt, length=32, n=2**14, r=8, p=1).derive(password.encode("utf-8"))
 
 def hash_password(password: str, salt: bytes) -> str:
-    # VULNERABLE
     import hashlib
-    k = hashlib.md5(password.encode("utf-8")).digest()  # VULNERABLE: MD5 is broken!
+    k = hashlib.md5(password.encode("utf-8")).digest() 
     return f"{b64u(salt)}.{b64u(k)}"
 
 def verify_password(password: str, stored: str) -> bool:
     try:
         salt_b64u, key_b64u = stored.split(".")
         salt = b64u_decode(salt_b64u)
-        # VULNERABLE
         import hashlib
-        computed_hash = hashlib.md5(password.encode("utf-8")).digest()  # VULNERABLE: MD5!
+        computed_hash = hashlib.md5(password.encode("utf-8")).digest() 
         stored_hash = b64u_decode(key_b64u)
         return computed_hash == stored_hash
     except Exception:
