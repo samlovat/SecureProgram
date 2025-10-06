@@ -19,7 +19,7 @@ This repo implements the **required** features of SOCP v1.3 in a compact, heavil
 - Sam Lovat <samuel.lovat@student.adelaide.edu.au>
 - Kemal Kiverić <kemal.kiveric@student.adelaide.edu.au>
 - Ayii Madut <ayii.madut@student.adelaide.edu.au>
-- Rajkarthic <rajkarthick.raju@student.adelaide.edu.au>
+- Rajkarthick Raju <rajkarthick.raju@student.adelaide.edu.au>
 
 ## Quickstart (three pinned servers on localhost)
 
