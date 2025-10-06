@@ -59,24 +59,21 @@ Look for these specific patterns in the code:
 ### **Exploitation Scripts**
 Use the provided exploitation scripts to test the vulnerabilities:
 
-**Working Exploits:**
-- `timing_attack_example.py` - Demonstrates username enumeration
-- `blind_sql_injection.py` - **Working** blind SQL injection using boolean-based technique
-- `extract_all_hashes.py` - **Complete** password hash extraction from all users
+**Working Exploit Chain (3 Essential Files):**
+- `blind_sql_injection.py` - **Core** blind SQL injection using boolean-based technique
+- `extract_all_hashes.py` - **Complete** password hash extraction from all users  
 - `crack_all_hashes.py` - **Successful** MD5 password cracking (6/7 passwords cracked)
 
-**Educational Examples:**
-- `sql_injection_exploit.py` - Shows UNION-based SQL injection theory (limited by app logic)
-- `complete_attack_chain.py` - Chains all vulnerabilities together
+**Note:** Non-essential educational files have been removed for clarity. These 3 files form the complete working attack chain from SQL injection through password recovery.
 
 ---
 
 ## 🎯 **Successful Exploitation Results**
 
 ### **Complete Attack Chain Executed:**
-1. **Timing Attack** → Identified valid usernames: `admin`, `alice`
-2. **SQL Injection** → Extracted all 7 user password hashes via blind boolean-based injection
-3. **MD5 Cracking** → Successfully cracked 6/7 passwords in 0.001 seconds
+1. **SQL Injection** → Extracted all 7 user password hashes via blind boolean-based injection  
+2. **MD5 Cracking** → Successfully cracked 6/7 passwords in 0.001 seconds
+3. **System Breach** → Multiple user accounts compromised including admin access
 
 ### **Compromised Accounts:**
 ```
