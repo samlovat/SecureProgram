@@ -1,4 +1,5 @@
 # SOCP Server Files - Generated during setup
+server_key.json
 server_key_srv-*.json
 socp*.db
 debug.log

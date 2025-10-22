@@ -8,8 +8,41 @@ from __future__ import annotations
 import sqlite3, json, os, secrets
 from typing import Optional, Dict, List, Tuple
 
-DB_PATH = os.environ.get("SOCP_DB", os.path.join(os.path.dirname(__file__), "socp.db"))
-SCHEMA_PATH = os.environ.get("SOCP_SCHEMA", os.path.join(os.path.dirname(__file__), "schema.sql"))
+def _validate_file_path(path: str, description: str) -> str:
+    """
+    Validate and sanitize file paths to prevent path traversal attacks.
+    Returns the validated absolute path.
+    """
+    if not path:
+        raise ValueError(f"{description} path cannot be empty")
+    
+    # Convert to absolute path to prevent traversal
+    abs_path = os.path.abspath(path)
+    
+    # Check for traversal sequences in the original path
+    if ".." in path:
+        raise ValueError(f"{description} path contains traversal sequences (..)")
+    
+    # Check for Windows-style traversal sequences
+    if "\\" in path and ".." in path.replace("\\", "/"):
+        raise ValueError(f"{description} path contains traversal sequences")
+    
+    # Ensure the path is within the project directory or current working directory
+    project_dir = os.path.dirname(__file__)
+    cwd = os.getcwd()
+    
+    # Allow paths within the project directory or current working directory
+    if not (abs_path.startswith(project_dir) or abs_path.startswith(cwd)):
+        raise ValueError(f"{description} path must be within the project directory or current working directory")
+    
+    return abs_path
+
+# Validate file paths from environment variables
+_raw_db_path = os.environ.get("SOCP_DB", os.path.join(os.path.dirname(__file__), "socp.db"))
+_raw_schema_path = os.environ.get("SOCP_SCHEMA", os.path.join(os.path.dirname(__file__), "schema.sql"))
+
+DB_PATH = _validate_file_path(_raw_db_path, "Database")
+SCHEMA_PATH = _validate_file_path(_raw_schema_path, "Schema")
 
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, isolation_level=None)
@@ -19,6 +52,7 @@ def get_conn() -> sqlite3.Connection:
 def init_db() -> None:
     if not os.path.exists(DB_PATH):
         open(DB_PATH, "a").close()
+    # SCHEMA_PATH has been validated and sanitized at module level
     with open(SCHEMA_PATH, "r", encoding="utf-8") as f, get_conn() as c:
         c.executescript(f.read())
     # ensure public channel exists
@@ -35,29 +69,29 @@ def create_user(user_id: str, pubkey_b64u: str, privkey_store_b64u: str, pake_pa
 def get_user(user_id: str) -> Optional[Dict]:
     with get_conn() as c:
         # ===============================================
-        # ⚠️  ETHICAL HACKING VULNERABILITY - INTENTIONALLY VULNERABLE CODE ⚠️
-        # VULNERABILITY #1: SQL INJECTION
+        # ✅ SECURITY FIX APPLIED: SQL INJECTION PREVENTION
         # ===============================================
-        # PROBLEM: user_id is directly concatenated into the SQL query without sanitization
-        # This creates a classic SQL injection vulnerability
+        # FIXED: Using parameterized queries to prevent SQL injection
+        # This prevents malicious SQL code from being executed
+        #
+        # SECURE IMPLEMENTATION:
+        # - Uses parameterized queries with ? placeholder
+        # - user_id is passed as a parameter, not concatenated into the query
+        # - SQLite automatically escapes and sanitizes the parameter
         #
         # HOW IT WORKS:
         # - Normal input: user_id = "alice" 
-        #   → Query: SELECT ... WHERE user_id='alice'
+        #   → Query: SELECT ... WHERE user_id=? with parameter ('alice',)
         # - Malicious input: user_id = "admin' OR '1'='1' --"
-        #   → Query: SELECT ... WHERE user_id='admin' OR '1'='1' --'
-        #   → This returns ALL users because '1'='1' is always true
+        #   → Query: SELECT ... WHERE user_id=? with parameter ("admin' OR '1'='1' --",)
+        #   → The malicious SQL is treated as literal data, not executable code
         #
-        # EXPLOITATION EXAMPLES:
-        # 1. Bypass authentication: "admin' OR '1'='1' --"
-        # 2. Extract all data: "x' UNION SELECT user_id, pubkey, privkey_store, pake_password, meta, version FROM users --"
-        # 3. Drop tables: "x'; DROP TABLE users; --"
-        #
-        # SECURE FIX: Use parameterized queries like the original code:
-        # row = c.execute("SELECT ... WHERE user_id=?", (user_id,)).fetchone()
+        # SECURITY BENEFITS:
+        # 1. Prevents SQL injection attacks
+        # 2. Automatic parameter escaping
+        # 3. Type safety and validation
         # ===============================================
-        query = f"SELECT user_id, pubkey, privkey_store, pake_password, meta, version FROM users WHERE user_id='{user_id}'"
-        row = c.execute(query).fetchone()
+        row = c.execute("SELECT user_id, pubkey, privkey_store, pake_password, meta, version FROM users WHERE user_id=?", (user_id,)).fetchone()
         if not row: return None
         return {"user_id": row[0], "pubkey": row[1], "privkey_store": row[2], "pake_password": row[3], "meta": row[4], "version": row[5]}
 

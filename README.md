@@ -49,6 +49,12 @@ This repo implements the **required** features of SOCP v1.3 in a compact, heavil
    python -c "import json; print(json.load(open('server_key_srv-a.json'))['pub_spki_b64u'])"  # repeat for b/c
    ```
 
+   ⚠️ **SECURITY WARNING**: The generated `server_key*.json` files contain RSA-4096 private keys in plaintext. These files are:
+   - **Automatically ignored by git** (added to `.gitignore`)
+   - **Must never be committed to version control**
+   - **Should be kept secure and not shared**
+   - **Regenerated for each deployment environment**
+
 3. **Populate introducer pins** – run the helper to inject the pubkeys and show ready-to-use bootstrap strings:
 
    ```bash

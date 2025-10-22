@@ -15,44 +15,38 @@ def _kdf(password: str, salt: bytes) -> bytes:
 
 def hash_password(password: str, salt: bytes) -> str:
     # ===============================================
-    # ⚠️  ETHICAL HACKING VULNERABILITY - INTENTIONALLY VULNERABLE CODE ⚠️
-    # VULNERABILITY #2: WEAK PASSWORD HASHING (MD5)
+    # ✅ SECURITY FIX APPLIED: WEAK PASSWORD HASHING PREVENTION
     # ===============================================
-    # PROBLEM: Using MD5 instead of secure scrypt for password hashing
-    # MD5 is cryptographically broken and extremely fast to compute
+    # FIXED: Replaced vulnerable MD5 with secure scrypt for password hashing
+    # This significantly increases resistance against brute-force attacks
     #
-    # WHY MD5 IS DANGEROUS:
-    # 1. MD5 is vulnerable to collision attacks (two different inputs produce same hash)
-    # 2. MD5 is extremely fast (billions of hashes per second on modern hardware)
-    # 3. Rainbow tables exist for common passwords
-    # 4. No salt is effectively used (salt is ignored in MD5 computation)
+    # SECURE IMPLEMENTATION:
+    # - Uses scrypt with proper salt and computational parameters
+    # - Scrypt is designed to be memory-hard and computationally expensive
+    # - Adaptive difficulty makes brute-force attacks impractical
     #
-    # HOW TO EXPLOIT:
-    # 1. Extract password hashes from database
-    # 2. Use tools like hashcat or john the ripper to crack MD5 hashes
-    # 3. For "password123": MD5 = 482c811da5d5b4bc6d497ffa98491e38
-    # 4. Look up in online MD5 databases (rainbow tables)
+    # SECURITY BENEFITS:
+    # 1. Memory-hard function: Requires significant RAM to compute
+    # 2. Computationally expensive: ~1000 hashes/second vs MD5's billions
+    # 3. Proper salt usage: Each password gets unique salt
+    # 4. Adaptive difficulty: Can be tuned to increase security over time
     #
-    # EXAMPLE CRACKING SPEEDS:
-    # - MD5: ~8 billion hashes/second on GPU
-    # - Scrypt: ~1000 hashes/second (much slower, designed to be slow)
-    #
-    # SECURE FIX: Use the original scrypt implementation:
-    # k = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1).derive(password.encode("utf-8"))
+    # PARAMETERS EXPLANATION:
+    # - n=2**14 (16384): CPU/memory cost parameter
+    # - r=8: Block size parameter  
+    # - p=1: Parallelization parameter
+    # - length=32: Output key length (256 bits)
     # ===============================================
-    import hashlib
-    k = hashlib.md5(password.encode("utf-8")).digest()  # VULNERABLE: MD5 is broken!
+    k = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1).derive(password.encode("utf-8"))
     return f"{b64u(salt)}.{b64u(k)}"
 
 def verify_password(password: str, stored: str) -> bool:
     try:
         salt_b64u, key_b64u = stored.split(".")
         salt = b64u_decode(salt_b64u)
-        # ⚠️  ETHICAL HACKING VULNERABILITY - INTENTIONALLY VULNERABLE CODE ⚠️
-        # VULNERABILITY: Also using MD5 for verification to match the weak hashing above
-        # This makes the timing attack even worse because MD5 is extremely fast
-        import hashlib
-        computed_hash = hashlib.md5(password.encode("utf-8")).digest()  # VULNERABLE: MD5!
+        # ✅ SECURITY FIX APPLIED: Using scrypt for verification to match secure hashing
+        # This ensures consistent security throughout the authentication process
+        computed_hash = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1).derive(password.encode("utf-8"))
         stored_hash = b64u_decode(key_b64u)
         return computed_hash == stored_hash
     except Exception:
