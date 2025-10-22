@@ -16,19 +16,42 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import hashlib
 from pathlib import Path
 from typing import Dict
+from datetime import datetime
 
 import yaml
 
 
 def load_pubkey(path: Path) -> str:
+    """Load and validate public key from JSON file."""
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
+    
+    # ✅ SECURITY FIX APPLIED: Validate JSON structure and pubkey
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: JSON must be an object")
+    
     try:
-        return data["pub_spki_b64u"]
+        pubkey = data["pub_spki_b64u"]
     except KeyError as exc:
         raise ValueError(f"{path} missing 'pub_spki_b64u'") from exc
+    
+    # Validate pubkey format and length
+    if not isinstance(pubkey, str):
+        raise ValueError(f"{path}: pubkey must be a string")
+    
+    if len(pubkey) < 100:  # RSA-4096 public keys should be much longer
+        raise ValueError(f"{path}: pubkey too short, possible tampering")
+    
+    # Check for valid base64url characters
+    valid_chars = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+    if not all(c in valid_chars for c in pubkey):
+        raise ValueError(f"{path}: pubkey contains invalid base64url characters")
+    
+    return pubkey
 
 
 def parse_key_spec(spec: str) -> tuple[str, Path]:
@@ -44,7 +67,39 @@ def parse_key_spec(spec: str) -> tuple[str, Path]:
     return url, path
 
 
+def create_backup(config_path: Path) -> Path:
+    """Create a timestamped backup of the config file."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = config_path.with_suffix(f".yaml.backup.{timestamp}")
+    shutil.copy2(config_path, backup_path)
+    
+    # Calculate checksum for integrity verification
+    with config_path.open("rb") as f:
+        checksum = hashlib.sha256(f.read()).hexdigest()
+    
+    checksum_path = backup_path.with_suffix(f"{backup_path.suffix}.sha256")
+    with checksum_path.open("w") as f:
+        f.write(f"{checksum}  {config_path.name}\n")
+    
+    return backup_path
+
+def verify_config_integrity(config_path: Path, original_checksum: str) -> bool:
+    """Verify config file hasn't been corrupted during update."""
+    with config_path.open("rb") as f:
+        current_checksum = hashlib.sha256(f.read()).hexdigest()
+    return current_checksum == original_checksum
+
 def update_config(config_path: Path, keys: Dict[str, str]) -> Dict[str, str]:
+    """Update config with backup and integrity checks."""
+    # ✅ SECURITY FIX APPLIED: Create backup before modifying config
+    backup_path = create_backup(config_path)
+    print(f"[BACKUP] Created backup: {backup_path}")
+    
+    # Calculate original checksum
+    with config_path.open("rb") as f:
+        original_checksum = hashlib.sha256(f.read()).hexdigest()
+    
+    # Load and validate config
     with config_path.open("r", encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
     if not isinstance(config, dict):
@@ -66,8 +121,27 @@ def update_config(config_path: Path, keys: Dict[str, str]) -> Dict[str, str]:
             entry["pubkey"] = keys[url]
             applied[url] = keys[url]
 
-    with config_path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(config, f, sort_keys=False)
+    # Write updated config
+    try:
+        with config_path.open("w", encoding="utf-8") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
+        
+        # Verify the write was successful by re-reading
+        with config_path.open("r", encoding="utf-8") as f:
+            test_load = yaml.safe_load(f)
+            if not isinstance(test_load, dict):
+                raise ValueError("Written config is invalid")
+        
+        print(f"[SUCCESS] Config updated successfully")
+        print(f"[INFO] Backup available at: {backup_path}")
+        
+    except Exception as e:
+        # Restore from backup if write failed
+        print(f"[ERROR] Failed to update config: {e}")
+        print(f"[RESTORE] Restoring from backup...")
+        shutil.copy2(backup_path, config_path)
+        print(f"[RESTORE] Config restored from backup")
+        raise
 
     return applied
 
