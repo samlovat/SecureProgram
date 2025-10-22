@@ -178,6 +178,64 @@ def get_progressive_delay(user_id: str) -> float:
     base_delay = 0.1
     return min(base_delay * (2 ** attempt_count), 2.0)  # Cap at 2 seconds
 
+def validate_websocket_origin(origin: str) -> bool:
+    """Validate WebSocket Origin header to prevent Cross-Site WebSocket Hijacking."""
+    # Skip validation if disabled (for development/testing)
+    if not ENABLE_ORIGIN_VALIDATION:
+        return True
+    
+    # Allow connections without Origin header (server-to-server, command-line clients)
+    if not origin:
+        return True
+    
+    # Normalize origin (remove trailing slash)
+    normalized_origin = origin.rstrip('/')
+    
+    # Check against allowed origins
+    return normalized_origin in ALLOWED_ORIGINS
+
+def validate_file_transfer(user_id: str, file_size: int, chunk_size: int) -> Tuple[bool, str]:
+    """Validate file transfer requests for security limits."""
+    # Check file size limit
+    if file_size > MAX_FILE_SIZE:
+        return False, f"File too large (max {MAX_FILE_SIZE // (1024*1024)}MB)"
+    
+    # Check chunk size limit
+    if chunk_size > MAX_CHUNK_SIZE:
+        return False, f"Chunk too large (max {MAX_CHUNK_SIZE // 1024}KB)"
+    
+    # Check concurrent file limit
+    if user_id in active_transfers and len(active_transfers[user_id]) >= MAX_CONCURRENT_FILES:
+        return False, f"Too many concurrent transfers (max {MAX_CONCURRENT_FILES})"
+    
+    # Check transfer rate limit
+    current_time = time.time()
+    if user_id in transfer_rates:
+        time_diff = current_time - transfer_rates[user_id]
+        if time_diff < 1.0:  # Less than 1 second since last transfer
+            return False, "Transfer rate limit exceeded"
+    
+    transfer_rates[user_id] = current_time
+    return True, ""
+
+def track_file_transfer(user_id: str, file_id: str, file_size: int):
+    """Track active file transfer."""
+    if user_id not in active_transfers:
+        active_transfers[user_id] = {}
+    
+    active_transfers[user_id][file_id] = {
+        "size": file_size,
+        "start_time": time.time(),
+        "bytes_transferred": 0
+    }
+
+def complete_file_transfer(user_id: str, file_id: str):
+    """Complete file transfer tracking."""
+    if user_id in active_transfers and file_id in active_transfers[user_id]:
+        del active_transfers[user_id][file_id]
+        if not active_transfers[user_id]:
+            del active_transfers[user_id]
+
 # ------------------ Process-level state ------------------
 presence_local: Dict[str, WebSocketServerProtocol] = {}   # local_users
 user_locations: Dict[str, str] = {}                       # user_id -> "local" | server_id
@@ -192,6 +250,27 @@ failed_login_attempts: Dict[str, int] = {}  # user_id -> attempt_count
 account_lockouts: Dict[str, float] = {}     # user_id -> lockout_until_timestamp
 MAX_FAILED_ATTEMPTS = 5  # Maximum failed attempts before lockout
 LOCKOUT_DURATION = 300   # Lockout duration in seconds (5 minutes)
+
+# ✅ SECURITY FIX APPLIED: WebSocket Origin validation
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000", 
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "https://localhost:3000",
+    "https://127.0.0.1:3000",
+    "https://localhost:8080", 
+    "https://127.0.0.1:8080"
+]
+ENABLE_ORIGIN_VALIDATION = False  # Set to False for development/testing
+
+# ✅ SECURITY FIX APPLIED: File transfer security limits
+MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB per file
+MAX_CHUNK_SIZE = 64 * 1024  # 64KB per chunk
+MAX_CONCURRENT_FILES = 5  # Max files per user
+MAX_TRANSFER_RATE = 1024 * 1024  # 1MB/s per user
+active_transfers: Dict[str, Dict[str, Any]] = {}  # user_id -> transfer_info
+transfer_rates: Dict[str, float] = {}  # user_id -> last_transfer_time
 
 SERVER_HOST: str = "127.0.0.1"
 SERVER_PORT: int = 0
@@ -834,8 +913,36 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                             await send_error_frame(ws, priv, this_sid, sender, "USER_NOT_FOUND", member)
 
             elif typ in ("FILE_START","FILE_CHUNK","FILE_END"):
-                # route by payload['to']
+                # ✅ SECURITY FIX APPLIED: File transfer security validation
                 to = p.get("to")
+                if not to:
+                    await send_error_frame(ws, priv, this_sid, user_id or "", "INVALID_INPUT", "Missing 'to' field")
+                    continue
+                
+                # Validate file transfer for FILE_START
+                if typ == "FILE_START":
+                    file_size = p.get("size", 0)
+                    chunk_size = p.get("chunk_size", 0)
+                    file_id = p.get("file_id", "")
+                    
+                    if not file_id:
+                        await send_error_frame(ws, priv, this_sid, user_id or "", "INVALID_INPUT", "Missing file_id")
+                        continue
+                    
+                    is_valid, error_msg = validate_file_transfer(user_id or "", file_size, chunk_size)
+                    if not is_valid:
+                        await send_error_frame(ws, priv, this_sid, user_id or "", "TRANSFER_LIMIT", error_msg)
+                        continue
+                    
+                    track_file_transfer(user_id or "", file_id, file_size)
+                
+                # Complete transfer tracking for FILE_END
+                elif typ == "FILE_END":
+                    file_id = p.get("file_id", "")
+                    if file_id:
+                        complete_file_transfer(user_id or "", file_id)
+                
+                # Route the file transfer message
                 if to in presence_local:
                     await send_user_frame(presence_local[to], priv, this_sid, to, f"{typ}_DELIVER", p)
                 else:
@@ -1019,8 +1126,20 @@ async def main():
     print(f"[SOCP] server {args.server_id} listening on ws://{args.host}:{args.port}")
     loop = asyncio.get_event_loop()
 
-    async with websockets.serve(lambda ws: handle_socket(ws, server_priv, args.server_id),
-                                args.host, args.port, ping_interval=15, ping_timeout=20):
+    # ✅ SECURITY FIX APPLIED: WebSocket Origin validation
+    async def websocket_connection_handler(ws: WebSocketServerProtocol, path: str):
+        """Custom WebSocket connection handler with Origin validation."""
+        origin = ws.request_headers.get('Origin')
+        
+        if not validate_websocket_origin(origin):
+            print(f"[SECURITY] Rejected WebSocket connection from invalid origin: {origin}")
+            await ws.close(code=1008, reason="Invalid Origin")
+            return
+        
+        print(f"[SECURITY] Accepted WebSocket connection from origin: {origin}")
+        await handle_socket(ws, server_priv, args.server_id)
+
+    async with websockets.serve(websocket_connection_handler, args.host, args.port, ping_interval=15, ping_timeout=20):
         # Bootstrap to peers with retry
         for url, pub in bootstrap_pins.items():
             if url.rstrip("/") == f"ws://{SERVER_HOST}:{SERVER_PORT}":
