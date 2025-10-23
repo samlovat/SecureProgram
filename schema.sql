@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS groups (
   creator_id TEXT NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   meta TEXT,
-  version INTEGER DEFAULT 1
+  version INTEGER DEFAULT 1,
+  FOREIGN KEY (creator_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS group_members (
   group_id TEXT NOT NULL,
@@ -22,5 +23,6 @@ CREATE TABLE IF NOT EXISTS group_members (
   wrapped_key TEXT,
   added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (group_id, member_id),
-  FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
+  FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE,
+  FOREIGN KEY (member_id) REFERENCES users(user_id) ON DELETE CASCADE
 );

@@ -972,15 +972,26 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                 await send_user_frame(ws, priv, this_sid, user_id or "", "LIST_RESPONSE", {"users": users})
 
             elif typ == "MSG_DIRECT":
+                # ✅ SECURITY FIX APPLIED: Authentication check for direct messages
+                if not user_id:
+                    print(f"[AUDIT] UNAUTHENTICATED_MSG_DIRECT: ip={get_client_ip(ws)}")
+                    await send_error_frame(ws, priv, this_sid, "", "AUTH_REQUIRED", "You must login to send direct messages")
+                    continue
                 await deliver_dm_or_forward(priv, this_sid, obj)
 
             elif typ == "MSG_PUBLIC_CHANNEL":
+                # ✅ SECURITY FIX APPLIED: Authentication check for public channel messages
+                if not user_id:
+                    print(f"[AUDIT] UNAUTHENTICATED_MSG_PUBLIC: ip={get_client_ip(ws)}")
+                    await send_error_frame(ws, priv, this_sid, "", "AUTH_REQUIRED", "You must login to send public messages")
+                    continue
+                
                 target_field = obj.get("to")
                 ciphertext = p.get("ciphertext")
                 sender_pub = p.get("sender_pub")
                 content_sig = p.get("content_sig")
                 ts = obj.get("ts") or now_ms()
-                sender = user_id or obj.get("from")
+                sender = user_id
                 if not sender or not ciphertext or not sender_pub or not content_sig:
                     await send_error_frame(ws, priv, this_sid, sender or "", "BAD_KEY", "public channel payload incomplete")
                     continue
@@ -1025,10 +1036,16 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                             await send_error_frame(ws, priv, this_sid, sender, "USER_NOT_FOUND", member)
 
             elif typ in ("FILE_START","FILE_CHUNK","FILE_END"):
+                # ✅ SECURITY FIX APPLIED: Authentication check for file transfers
+                if not user_id:
+                    print(f"[AUDIT] UNAUTHENTICATED_FILE_TRANSFER: ip={get_client_ip(ws)}, type={typ}")
+                    await send_error_frame(ws, priv, this_sid, "", "AUTH_REQUIRED", "You must login to transfer files")
+                    continue
+                
                 # ✅ SECURITY FIX APPLIED: File transfer security validation
                 to = p.get("to")
                 if not to:
-                    await send_error_frame(ws, priv, this_sid, user_id or "", "INVALID_INPUT", "Missing 'to' field")
+                    await send_error_frame(ws, priv, this_sid, user_id, "INVALID_INPUT", "Missing 'to' field")
                     continue
                 
                 # Validate file transfer for FILE_START
@@ -1245,7 +1262,13 @@ async def main():
     if len(bootstrap_pins) < 3:
         print("[warn] fewer than 3 introducers configured; add more to meet spec")
 
-    print(f"[SOCP] server {args.server_id} listening on ws://{args.host}:{args.port}")
+    # ⚠️ SECURITY NOTE: For production, use WSS (WebSocket Secure) instead of WS
+    # Configure your reverse proxy (nginx/apache) with TLS/SSL certificates
+    # Example: wss://your-domain.com instead of ws://localhost:8765
+    protocol = "ws"  # Change to "wss" in production with proper TLS setup
+    print(f"[SOCP] server {args.server_id} listening on {protocol}://{args.host}:{args.port}")
+    if protocol == "ws":
+        print("[WARNING] Using unencrypted WebSocket (ws://). Use wss:// in production!")
     loop = asyncio.get_event_loop()
 
     # ✅ SECURITY FIX APPLIED: WebSocket Origin validation
