@@ -303,12 +303,40 @@ class Client:
         if to not in self.pubkeys:
             print("unknown recipient pubkey; try /list"); return
         pub = load_public_spki_b64u(self.pubkeys[to])
-        if not os.path.exists(path):
-            print(f"file not found: {path}"); return
-        size = os.path.getsize(path)
+        
+        # ✅ SECURITY FIX APPLIED: Validate file path to prevent path traversal
+        # Convert to absolute path and validate
+        abs_path = os.path.abspath(path)
+        cwd = os.getcwd()
+        
+        # Check for path traversal attempts
+        if ".." in path:
+            print(f"[SECURITY] Path traversal detected: {path}")
+            print("[SECURITY] File paths with '..' are not allowed")
+            return
+        
+        # Ensure path is within current working directory
+        if not abs_path.startswith(cwd):
+            print(f"[SECURITY] Access denied: {path}")
+            print(f"[SECURITY] Files must be within current directory: {cwd}")
+            return
+        
+        if not os.path.exists(abs_path):
+            print(f"file not found: {abs_path}"); return
+        
+        if not os.path.isfile(abs_path):
+            print(f"not a file: {abs_path}"); return
+        
+        size = os.path.getsize(abs_path)
+        
+        # Additional security checks
+        MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+        if size > MAX_FILE_SIZE:
+            print(f"[SECURITY] File too large: {size} bytes (max {MAX_FILE_SIZE} bytes)")
+            return
         import hashlib
         h = hashlib.sha256()
-        with open(path, "rb") as fh:
+        with open(abs_path, "rb") as fh:
             while True:
                 buf = fh.read(65536)
                 if not buf:
@@ -317,9 +345,9 @@ class Client:
         digest_hex = h.hexdigest()
         file_id = f"file-{now_ms()}"
         await self.send({"type":"FILE_START","ts":now_ms(),
-                         "payload":{"file_id":file_id,"name":os.path.basename(path),"size":size,"sha256":digest_hex,"mode":"dm","to":to}})
+                         "payload":{"file_id":file_id,"name":os.path.basename(abs_path),"size":size,"sha256":digest_hex,"mode":"dm","to":to}})
         idx = 0
-        with open(path, "rb") as f:
+        with open(abs_path, "rb") as f:
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk: break
@@ -345,7 +373,8 @@ async def repl(url: str):
             print("> ", end="", flush=True); continue
         if line.startswith("/"):
             parts = shlex.split(line)
-            cmd = parts[0][1:]
+            # Remove leading slashes from command (handle / or // or ///)
+            cmd = parts[0].lstrip("/")
             print(f"[debug] parsed command: {cmd}, parts: {parts}")  # Debug output
             try:
                 if cmd == "register":

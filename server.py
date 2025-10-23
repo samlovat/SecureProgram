@@ -735,13 +735,13 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                     continue
                 
                 # Validate field lengths
-                if len(pub) > 2000:  # Reasonable limit for public key
+                if len(pub) > 1000:  # RSA-4096 public key in base64url
                     await send_error_frame(ws, priv, this_sid, uid, "INVALID_INPUT", "pubkey too long")
                     continue
-                if len(priv_store) > 2000:  # Reasonable limit for private key store
+                if len(priv_store) > 10000:  # Encrypted private key blob (JSON with salt, nonce, ciphertext)
                     await send_error_frame(ws, priv, this_sid, uid, "INVALID_INPUT", "privkey_store too long")
                     continue
-                if len(pw_hash) > 500:  # Reasonable limit for password hash
+                if len(pw_hash) > 200:  # Scrypt hash with salt (base64url encoded)
                     await send_error_frame(ws, priv, this_sid, uid, "INVALID_INPUT", "pake_password too long")
                     continue
                 
