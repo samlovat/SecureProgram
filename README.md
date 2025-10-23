@@ -99,6 +99,8 @@ This repo implements the **required** features of SOCP v1.3 in a compact, heavil
    > /register bob s3cret
    > /login bob s3cret
    > /tell alice hello across servers!
+   > /list
+   # Wait a few seconds for the response
    > /file alice ./README.md
    ```
 

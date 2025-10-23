@@ -178,6 +178,61 @@ def get_progressive_delay(user_id: str) -> float:
     base_delay = 0.1
     return min(base_delay * (2 ** attempt_count), 2.0)  # Cap at 2 seconds
 
+def is_ip_locked(ip_addr: str) -> bool:
+    """Check if an IP address is currently locked."""
+    if ip_addr not in ip_lockouts:
+        return False
+    
+    lockout_until = ip_lockouts[ip_addr]
+    if time.time() > lockout_until:
+        # Lockout expired, clean up
+        ip_lockouts.pop(ip_addr, None)
+        ip_login_attempts.pop(ip_addr, None)
+        return False
+    
+    return True
+
+def record_ip_login_attempt(ip_addr: str) -> bool:
+    """
+    Record a login attempt from an IP and check if rate limit exceeded.
+    Returns True if rate limit exceeded, False otherwise.
+    Uses sliding window algorithm.
+    """
+    current_time = time.time()
+    
+    # Initialize if not exists
+    if ip_addr not in ip_login_attempts:
+        ip_login_attempts[ip_addr] = []
+    
+    # Remove attempts outside the time window (sliding window)
+    ip_login_attempts[ip_addr] = [
+        ts for ts in ip_login_attempts[ip_addr]
+        if current_time - ts < IP_RATE_WINDOW
+    ]
+    
+    # Add current attempt
+    ip_login_attempts[ip_addr].append(current_time)
+    
+    # Check if exceeded limit
+    if len(ip_login_attempts[ip_addr]) > MAX_IP_ATTEMPTS_PER_WINDOW:
+        # Lock the IP
+        ip_lockouts[ip_addr] = current_time + LOCKOUT_DURATION
+        print(f"[AUDIT] IP_RATE_LIMIT_EXCEEDED: ip={ip_addr}, attempts={len(ip_login_attempts[ip_addr])}")
+        return True
+    
+    return False
+
+def get_client_ip(ws: WebSocketServerProtocol) -> str:
+    """Extract client IP address from WebSocket connection."""
+    try:
+        # Get remote address from WebSocket
+        remote = ws.remote_address
+        if remote:
+            return remote[0] if isinstance(remote, tuple) else str(remote)
+    except Exception:
+        pass
+    return "unknown"
+
 def validate_websocket_origin(origin: str) -> bool:
     """Validate WebSocket Origin header to prevent Cross-Site WebSocket Hijacking."""
     # Skip validation if disabled (for development/testing)
@@ -245,11 +300,15 @@ seen_server_payloads = ReplayCache(max_items=8192, ttl_sec=90)
 server_ws_reverse: Dict[WebSocketServerProtocol, str] = {}
 server_last_seen: Dict[str, float] = {}
 
-# ✅ SECURITY FIX APPLIED: Account lockout protection against timing attacks
+# ✅ SECURITY FIX APPLIED: Enhanced authentication rate limiting with per-IP tracking
 failed_login_attempts: Dict[str, int] = {}  # user_id -> attempt_count
 account_lockouts: Dict[str, float] = {}     # user_id -> lockout_until_timestamp
-MAX_FAILED_ATTEMPTS = 5  # Maximum failed attempts before lockout
+ip_login_attempts: Dict[str, List[float]] = {}  # ip -> [timestamp1, timestamp2, ...]
+ip_lockouts: Dict[str, float] = {}          # ip -> lockout_until_timestamp
+MAX_FAILED_ATTEMPTS = 5  # Maximum failed attempts before account lockout
 LOCKOUT_DURATION = 300   # Lockout duration in seconds (5 minutes)
+MAX_IP_ATTEMPTS_PER_WINDOW = 20  # Maximum attempts per IP in time window
+IP_RATE_WINDOW = 300  # Time window for IP rate limiting (5 minutes)
 
 # ✅ SECURITY FIX APPLIED: WebSocket Origin validation
 ALLOWED_ORIGINS = [
@@ -432,22 +491,57 @@ async def handle_server_frame(ws: WebSocketServerProtocol, server_id: str, obj: 
     global PUBLIC_VERSION
     t = obj.get("type"); p = obj.get("payload", {}); frm = obj.get("from"); sig = obj.get("sig","")
     server_last_seen[server_id] = time.time()
-    if frm and server_id and frm != server_id:
+    
+    # ✅ SECURITY FIX APPLIED: Strict signature verification (SOCP §8)
+    # 1. Require 'from' field - reject if missing
+    if not frm:
+        print(f"[SECURITY] Rejected server frame from {server_id}: missing 'from' field")
+        # Send error frame back
+        error_payload = {"error": "MISSING_FROM_FIELD", "message": "Server frames must include 'from' field"}
+        error_frame = {"type": "ERROR", "from": this_sid, "to": server_id, "ts": now_ms(), "payload": error_payload}
+        error_frame["sig"] = transport_sign(priv, error_payload)
+        try:
+            await ws.send(json.dumps(error_frame))
+        except Exception:
+            pass
         return
-    # Loop/duplicate suppression on server payloads
+    
+    # 2. Verify 'from' matches connection
+    if frm != server_id:
+        print(f"[SECURITY] Rejected server frame: 'from' field ({frm}) doesn't match server_id ({server_id})")
+        return
+    
+    # 3. Look up server in registry - reject if unknown
+    entry = server_addrs.get(frm)
+    if not entry:
+        print(f"[SECURITY] Rejected server frame from unknown server: {frm}")
+        return
+    
+    # 4. Verify transport signature BEFORE any processing
+    if not transport_verify(entry[2], p, sig):
+        print(f"[SECURITY] Signature verification FAILED for server frame from {frm}, type={t}")
+        # Audit log for security monitoring
+        print(f"[AUDIT] SIGNATURE_FAILURE: server={frm}, type={t}, ts={obj.get('ts')}, payload_hash={payload_hash16(p).hex()}")
+        # Send error frame
+        error_payload = {"error": "SIGNATURE_VERIFICATION_FAILED", "message": "Invalid signature"}
+        error_frame = {"type": "ERROR", "from": this_sid, "to": frm, "ts": now_ms(), "payload": error_payload}
+        error_frame["sig"] = transport_sign(priv, error_payload)
+        try:
+            await ws.send(json.dumps(error_frame))
+        except Exception:
+            pass
+        return
+    
+    # 5. ONLY NOW check replay cache (after signature verification)
     cache_fields = [
         str(obj.get("ts", "")).encode("utf-8"),
-        (frm or "").encode("utf-8"),
+        frm.encode("utf-8"),
         str(obj.get("to", "")).encode("utf-8"),
         payload_hash16(p),
     ]
     if seen_server_payloads.seen(*cache_fields):
+        print(f"[SECURITY] Replay detected from {frm}, type={t}")
         return
-    # Verify transport signature using pinned pubkey for frm
-    peer_key = frm or server_id
-    entry = server_addrs.get(peer_key)
-    if not entry or not transport_verify(entry[2], p, sig):
-        return  # drop
 
     if t == "SERVER_ANNOUNCE":
         host, port, pub = p.get("host"), p.get("port"), p.get("pubkey")
@@ -752,8 +846,24 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                 await send_user_frame(ws, priv, this_sid, uid, "USER_REGISTERED", {"user_id": uid})
 
             elif typ == "USER_LOGIN":
-                # ✅ SECURITY FIX APPLIED: Input validation for user login
+                # ✅ SECURITY FIX APPLIED: Enhanced authentication with per-IP rate limiting
                 uid, pw = p.get("user_id"), p.get("password") or ""
+                
+                # Get client IP address
+                client_ip = get_client_ip(ws)
+                
+                # Check IP-based rate limiting (sliding window)
+                if is_ip_locked(client_ip):
+                    print(f"[AUDIT] LOGIN_BLOCKED_IP_LOCKED: ip={client_ip}, user={uid}")
+                    await send_error_frame(ws, priv, this_sid, uid or "", "RATE_LIMIT_EXCEEDED", "Too many login attempts")
+                    continue
+                
+                # Record this login attempt for IP rate limiting
+                if record_ip_login_attempt(client_ip):
+                    # IP exceeded rate limit
+                    print(f"[AUDIT] IP_LOCKED: ip={client_ip}, user={uid}")
+                    await send_error_frame(ws, priv, this_sid, uid or "", "RATE_LIMIT_EXCEEDED", "Too many login attempts")
+                    continue
                 
                 # Validate user_id
                 if uid:
@@ -769,7 +879,8 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                 
                 rec = get_user(uid) if uid else None
                 if not rec:
-                    await send_error_frame(ws, priv, this_sid, uid or "", "USER_NOT_FOUND", "unknown user")
+                    print(f"[AUDIT] LOGIN_FAILED_USER_NOT_FOUND: user={uid}, ip={client_ip}")
+                    await send_error_frame(ws, priv, this_sid, uid or "", "AUTH_FAILED", "Authentication failed")
                     continue
                 if hello_user_id and hello_user_id != uid:
                     await send_error_frame(ws, priv, this_sid, uid, "BAD_KEY", "HELLO user mismatch")
@@ -798,7 +909,8 @@ async def handle_socket(ws: WebSocketServerProtocol, priv, this_sid: str):
                 
                 # Check if account is locked
                 if is_account_locked(uid):
-                    await send_error_frame(ws, priv, this_sid, uid, "ACCOUNT_LOCKED", "Account temporarily locked due to failed attempts")
+                    print(f"[AUDIT] LOGIN_BLOCKED_ACCOUNT_LOCKED: user={uid}, ip={client_ip}")
+                    await send_error_frame(ws, priv, this_sid, uid, "AUTH_FAILED", "Authentication failed")
                     continue
                 
                 # Always perform password verification to maintain constant time
@@ -1058,9 +1170,11 @@ async def connect_to_peer(url: str, expected_pubkey: str, this_sid: str, priv, l
 
 
 async def connect_to_peer_with_retry(url: str, expected_pubkey: str, this_sid: str, priv, loop):
-    """Establish a server↔server connection with automatic retry."""
+    """Establish a server↔server connection with automatic retry using exponential backoff."""
+    # ✅ SECURITY FIX APPLIED: Exponential backoff with jitter to prevent DoS amplification
     max_retries = 10
-    retry_delay = 5  # seconds
+    base_delay = 2  # Initial delay in seconds
+    max_delay = 300  # Maximum delay cap (5 minutes)
     
     for attempt in range(max_retries):
         try:
@@ -1072,8 +1186,16 @@ async def connect_to_peer_with_retry(url: str, expected_pubkey: str, this_sid: s
         except Exception as e:
             print(f"[bootstrap] failed to connect {url} (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:  # Don't sleep on the last attempt
-                print(f"[bootstrap] retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
+                # Exponential backoff: 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 300s (capped)
+                exponential_delay = min(base_delay * (2 ** attempt), max_delay)
+                
+                # Add jitter (±20%) to prevent synchronized retries
+                import random
+                jitter = exponential_delay * 0.2 * (random.random() * 2 - 1)  # Random between -20% and +20%
+                actual_delay = max(1, exponential_delay + jitter)  # Minimum 1 second
+                
+                print(f"[bootstrap] retrying in {actual_delay:.1f} seconds (exponential backoff with jitter)...")
+                await asyncio.sleep(actual_delay)
             else:
                 print(f"[bootstrap] giving up on {url} after {max_retries} attempts")
 

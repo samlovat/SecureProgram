@@ -62,10 +62,20 @@ class Client:
         await self.ws.send(json.dumps(obj))
 
     async def recv_loop(self):
+        """Main message receiving loop with comprehensive exception handling."""
         try:
             async for raw in self.ws:
-                msg = json.loads(raw)
-                t = msg.get("type")
+                try:
+                    msg = json.loads(raw)
+                    t = msg.get("type")
+                except json.JSONDecodeError as e:
+                    print(f"\n[error] Invalid JSON received: {e}")
+                    print("> ", end="", flush=True)
+                    continue
+                except Exception as e:
+                    print(f"\n[error] Failed to parse message: {e}")
+                    print("> ", end="", flush=True)
+                    continue
                 if t == "USER_DELIVER":
                     # E2EE DM delivery: decrypt ciphertext with our private key
                     p = msg.get("payload", {})
@@ -99,12 +109,27 @@ class Client:
 
                 elif t == "LIST_RESPONSE":
                     # cache pubkeys (if provided)
-                    for u in msg.get("users", []):
+                    payload = msg.get("payload", {})
+                    users_list = []
+                    for u in payload.get("users", []):
                         if "pubkey" in u and u["pubkey"]:
                             self.pubkeys[u["user_id"]] = u["pubkey"]
                             if self.user_id and u["user_id"] == self.user_id and not self.pub_b64u:
                                 self.pub_b64u = u["pubkey"]
-                    print(f"\n{msg}")
+                        # Build clean user list
+                        user_id = u.get("user_id", "unknown")
+                        online = " (online)" if u.get("online_local") else ""
+                        users_list.append(f"  • {user_id}{online}")
+                    
+                    # Clean, user-friendly output
+                    print(f"\n[directory] {len(users_list)} user(s) available:")
+                    if users_list:
+                        for user_line in users_list:
+                            print(user_line)
+                        print(f"[info] You can send messages with: /tell <user> <message>")
+                        print(f"[info] You can send files with: /file <user> <path>")
+                    else:
+                        print("[info] No users found. Register and login to appear in the directory.")
                     print("> ", end="", flush=True)
 
                 elif t == "USER_ADDED":
@@ -166,6 +191,13 @@ class Client:
                         print(f"\n[public decrypt error] {e}")
                     print("> ", end="", flush=True)
 
+                elif t == "USER_REGISTERED":
+                    payload = msg.get("payload", {})
+                    user_id = payload.get("user_id", "unknown")
+                    print(f"\n[success] Account created: {user_id}")
+                    print(f"[info] You can now login with: /login {user_id} <password>")
+                    print("> ", end="", flush=True)
+
                 elif t == "USER_LOGGED_IN":
                     payload = msg.get("payload", {})
                     self.user_id = payload.get("user_id", self.user_id)
@@ -193,10 +225,18 @@ class Client:
                     print("> ", end="", flush=True)
 
                 else:
-                    print(f"\n{msg}")
+                    # Log unhandled message types (for debugging)
+                    if t not in ["HEARTBEAT", "SERVER_ANNOUNCE", "USER_ADVERTISE"]:
+                        print(f"\n[debug] Unhandled message type: {t}")
                     print("> ", end="", flush=True)
         except websockets.ConnectionClosed:
-            print("\n[disconnected]")
+            print("\n[info] Connection closed by server")
+        except websockets.exceptions.WebSocketException as e:
+            print(f"\n[error] WebSocket error: {e}")
+        except Exception as e:
+            print(f"\n[error] Unexpected error in recv_loop: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def cmd_register(self, user: str, password: str):
         # Generate RSA-4096; keep priv in-memory for this session; store encrypted blob server-side for demo
@@ -300,62 +340,110 @@ class Client:
             print("no recipients for broadcast")
 
     async def cmd_file(self, to: str, path: str, chunk_size=32*1024):
-        if to not in self.pubkeys:
-            print("unknown recipient pubkey; try /list"); return
-        pub = load_public_spki_b64u(self.pubkeys[to])
-        
-        # ✅ SECURITY FIX APPLIED: Validate file path to prevent path traversal
-        # Convert to absolute path and validate
-        abs_path = os.path.abspath(path)
-        cwd = os.getcwd()
-        
-        # Check for path traversal attempts
-        if ".." in path:
-            print(f"[SECURITY] Path traversal detected: {path}")
-            print("[SECURITY] File paths with '..' are not allowed")
-            return
-        
-        # Ensure path is within current working directory
-        if not abs_path.startswith(cwd):
-            print(f"[SECURITY] Access denied: {path}")
-            print(f"[SECURITY] Files must be within current directory: {cwd}")
-            return
-        
-        if not os.path.exists(abs_path):
-            print(f"file not found: {abs_path}"); return
-        
-        if not os.path.isfile(abs_path):
-            print(f"not a file: {abs_path}"); return
-        
-        size = os.path.getsize(abs_path)
-        
-        # Additional security checks
-        MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-        if size > MAX_FILE_SIZE:
-            print(f"[SECURITY] File too large: {size} bytes (max {MAX_FILE_SIZE} bytes)")
-            return
-        import hashlib
-        h = hashlib.sha256()
-        with open(abs_path, "rb") as fh:
-            while True:
-                buf = fh.read(65536)
-                if not buf:
-                    break
-                h.update(buf)
-        digest_hex = h.hexdigest()
-        file_id = f"file-{now_ms()}"
-        await self.send({"type":"FILE_START","ts":now_ms(),
-                         "payload":{"file_id":file_id,"name":os.path.basename(abs_path),"size":size,"sha256":digest_hex,"mode":"dm","to":to}})
-        idx = 0
-        with open(abs_path, "rb") as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk: break
-                ct = rsa_oaep_encrypt(pub, chunk)
-                await self.send({"type":"FILE_CHUNK","ts":now_ms(),
-                                 "payload":{"file_id":file_id,"index":idx,"ciphertext":b64u(ct),"to":to}})
-                idx += 1
-        await self.send({"type":"FILE_END","ts":now_ms(),"payload":{"file_id":file_id,"to":to}})
+        """Send a file to another user with comprehensive error handling."""
+        try:
+            if to not in self.pubkeys:
+                print(f"[error] Unknown recipient '{to}'")
+                print(f"[info] Available users: {list(self.pubkeys.keys())}")
+                print("[info] Run /list to fetch the latest user directory")
+                return
+            
+            try:
+                pub = load_public_spki_b64u(self.pubkeys[to])
+            except Exception as e:
+                print(f"[error] Invalid public key for {to}: {e}")
+                return
+            
+            # ✅ SECURITY FIX APPLIED: Validate file path to prevent path traversal
+            # Convert to absolute path and validate
+            abs_path = os.path.abspath(path)
+            cwd = os.getcwd()
+            
+            # Check for path traversal attempts
+            if ".." in path:
+                print(f"[error] Path traversal detected: {path}")
+                print("[info] File paths with '..' are not allowed")
+                return
+            
+            # Ensure path is within current working directory
+            if not abs_path.startswith(cwd):
+                print(f"[error] Access denied: {path}")
+                print(f"[info] Files must be within current directory: {cwd}")
+                return
+            
+            if not os.path.exists(abs_path):
+                print(f"[error] File not found: {abs_path}")
+                return
+            
+            if not os.path.isfile(abs_path):
+                print(f"[error] Not a file: {abs_path}")
+                return
+            
+            size = os.path.getsize(abs_path)
+            
+            # Additional security checks
+            MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+            if size > MAX_FILE_SIZE:
+                print(f"[error] File too large: {size} bytes (max {MAX_FILE_SIZE // (1024*1024)}MB)")
+                return
+            
+            # Calculate SHA256 checksum
+            import hashlib
+            h = hashlib.sha256()
+            try:
+                with open(abs_path, "rb") as fh:
+                    while True:
+                        buf = fh.read(65536)
+                        if not buf:
+                            break
+                        h.update(buf)
+            except IOError as e:
+                print(f"[error] Failed to read file: {e}")
+                return
+                
+            digest_hex = h.hexdigest()
+            file_id = f"file-{now_ms()}"
+            filename = os.path.basename(abs_path)
+            
+            # Clean output
+            print(f"[file] Sending '{filename}' to {to}")
+            print(f"[file] Size: {size:,} bytes | SHA256: {digest_hex[:16]}...")
+            
+            # Send FILE_START
+            await self.send({"type":"FILE_START","ts":now_ms(),
+                             "payload":{"file_id":file_id,"name":filename,"size":size,"sha256":digest_hex,"mode":"dm","to":to}})
+            
+            # Send chunks
+            idx = 0
+            try:
+                with open(abs_path, "rb") as f:
+                    while True:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                        try:
+                            ct = rsa_oaep_encrypt(pub, chunk)
+                            await self.send({"type":"FILE_CHUNK","ts":now_ms(),
+                                             "payload":{"file_id":file_id,"index":idx,"ciphertext":b64u(ct),"to":to}})
+                            idx += 1
+                            # Progress indicator
+                            if idx % 10 == 0:
+                                print(f"[file] Sent {idx} chunks...")
+                        except Exception as e:
+                            print(f"[error] Failed to encrypt/send chunk {idx}: {e}")
+                            return
+            except IOError as e:
+                print(f"[error] Failed to read file during transfer: {e}")
+                return
+            
+            # Send FILE_END
+            await self.send({"type":"FILE_END","ts":now_ms(),"payload":{"file_id":file_id,"to":to}})
+            print(f"[file] Transfer complete: {idx} chunks sent")
+            
+        except Exception as e:
+            print(f"[error] File transfer failed: {e}")
+            import traceback
+            traceback.print_exc()
 
 async def repl(url: str):
     c = Client(url)
@@ -372,35 +460,63 @@ async def repl(url: str):
         if not line:
             print("> ", end="", flush=True); continue
         if line.startswith("/"):
-            parts = shlex.split(line)
-            # Remove leading slashes from command (handle / or // or ///)
-            cmd = parts[0].lstrip("/")
-            print(f"[debug] parsed command: {cmd}, parts: {parts}")  # Debug output
             try:
-                if cmd == "register":
-                    _, user, password = parts
-                    await c.cmd_register(user, password)
-                elif cmd == "login":
-                    _, user, password = parts
-                    await c.cmd_login(user, password)
-                elif cmd == "list":
-                    await c.cmd_list()
-                elif cmd == "tell":
-                    _, to, *rest = parts
-                    await c.cmd_tell(to, " ".join(rest))
-                elif cmd == "all":
-                    _, *rest = parts
-                    await c.cmd_all(" ".join(rest))
-                elif cmd == "file":
-                    if len(parts) < 3:
-                        print("usage: /file <user> <path>")
-                        continue
-                    _, to, path = parts
-                    await c.cmd_file(to, path)
-                else:
-                    print(f"unknown command: {cmd}")
-            except ValueError:
-                print("bad usage")
+                parts = shlex.split(line)
+                # Remove leading slashes from command (handle / or // or ///)
+                cmd = parts[0].lstrip("/")
+                
+                try:
+                    if cmd == "register":
+                        if len(parts) != 3:
+                            print("[usage] /register <username> <password>")
+                            continue
+                        _, user, password = parts
+                        await c.cmd_register(user, password)
+                    elif cmd == "login":
+                        if len(parts) != 3:
+                            print("[usage] /login <username> <password>")
+                            continue
+                        _, user, password = parts
+                        await c.cmd_login(user, password)
+                    elif cmd == "list":
+                        await c.cmd_list()
+                    elif cmd == "tell":
+                        if len(parts) < 3:
+                            print("[usage] /tell <user> <message>")
+                            continue
+                        _, to, *rest = parts
+                        await c.cmd_tell(to, " ".join(rest))
+                    elif cmd == "all":
+                        if len(parts) < 2:
+                            print("[usage] /all <message>")
+                            continue
+                        _, *rest = parts
+                        await c.cmd_all(" ".join(rest))
+                    elif cmd == "file":
+                        if len(parts) < 3:
+                            print("[usage] /file <user> <path>")
+                            continue
+                        _, to, path = parts
+                        await c.cmd_file(to, path)
+                    elif cmd == "help":
+                        print("\nAvailable commands:")
+                        print("  /register <username> <password> - Create new account")
+                        print("  /login <username> <password>    - Login to account")
+                        print("  /list                           - List all users")
+                        print("  /tell <user> <message>          - Send direct message")
+                        print("  /all <message>                  - Broadcast to public channel")
+                        print("  /file <user> <path>             - Send file to user")
+                        print("  /help                           - Show this help")
+                    else:
+                        print(f"[error] Unknown command: /{cmd}")
+                        print("[info] Type /help for available commands")
+                except ValueError as e:
+                    print(f"[error] Invalid command format: {e}")
+                    print("[info] Type /help for usage information")
+                except Exception as e:
+                    print(f"[error] Command failed: {e}")
+            except Exception as e:
+                print(f"[error] Failed to parse command: {e}")
         else:
             print("Commands start with /. Try /list or /tell <user> <msg>")
         print("> ", end="", flush=True)
