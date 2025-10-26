@@ -1,4 +1,11 @@
-
+'''
+## Contact Details of Group 16 Members if Required:
+- Tony Le <tony.le@student.adelaide.edu.au>
+- Sam Lovat <samuel.lovat@student.adelaide.edu.au>
+- Kemal Kiverić <kemal.kiveric@student.adelaide.edu.au>
+- Ayii Madut <ayii.madut@student.adelaide.edu.au>
+- Rajkarthic <rajkarthick.raju@student.adelaide.edu.au>
+'''
 """
 SOCP v1.3 Client (educational). Implements:
 - /register, /login, /list, /tell, /all, /file
