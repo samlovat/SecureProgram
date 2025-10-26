@@ -1,4 +1,4 @@
-
+GROUP 16
 # SOCP v1.3 – Minimal but Spec‑Complete (Educational)
 
 This repo implements the **required** features of SOCP v1.3 in a compact, heavily‑commented form:
@@ -14,7 +14,7 @@ This repo implements the **required** features of SOCP v1.3 in a compact, heavil
 
 > This is an instructional reference. It favours clarity over performance.
 
-## Contact Details of Group Members if Required:
+## Contact Details of Group 16 Members if Required:
 - Tony Le <tony.le@student.adelaide.edu.au>
 - Sam Lovat <samuel.lovat@student.adelaide.edu.au>
 - Kemal Kiverić <kemal.kiveric@student.adelaide.edu.au>

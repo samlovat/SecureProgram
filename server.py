@@ -1,9 +1,13 @@
+'''
+## Contact Details of Group 16 Members if Required:
+- Tony Le <tony.le@student.adelaide.edu.au>
+- Sam Lovat <samuel.lovat@student.adelaide.edu.au>
+- Kemal Kiverić <kemal.kiveric@student.adelaide.edu.au>
+- Ayii Madut <ayii.madut@student.adelaide.edu.au>
+- Rajkarthic <rajkarthick.raju@student.adelaide.edu.au>
+'''
 
 """SOCP v1.3 educational server with spec-required features in compact form.
-
-⚠️  WARNING: THIS CODE CONTAINS INTENTIONAL VULNERABILITIES FOR ETHICAL HACKING EDUCATION ⚠️
-This version has been modified to include intentional security vulnerabilities:
-This is for educational purposes only to demonstrate security vulnerabilities.
 
 - WebSocket server that accepts both Users and Servers.
 - Bootstrap: HELLO_JOIN/WELCOME/ANNOUNCE (localhost demo uses CLI args to simplify introducer).

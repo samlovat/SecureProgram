@@ -1,5 +1,12 @@
-
-"""RSA-4096 OAEP/PSS + base64url helpers."""
+'''
+## Contact Details of Group 16 Members if Required:
+- Tony Le <tony.le@student.adelaide.edu.au>
+- Sam Lovat <samuel.lovat@student.adelaide.edu.au>
+- Kemal Kiverić <kemal.kiveric@student.adelaide.edu.au>
+- Ayii Madut <ayii.madut@student.adelaide.edu.au>
+- Rajkarthic <rajkarthick.raju@student.adelaide.edu.au>
+RSA-4096 OAEP/PSS + base64url helpers.
+'''
 from __future__ import annotations
 from typing import Tuple
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
