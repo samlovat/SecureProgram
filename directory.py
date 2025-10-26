@@ -1,6 +1,9 @@
 
 """SQLite directory CRUD for users + public channel metadata.
 
+WARNING: THIS FILE CONTAINS INTENTIONAL VULNERABILITIES FOR ETHICAL HACKING EDUCATION 
+This is for educational purposes only to demonstrate security vulnerabilities.
+
 ## Contact Details of Group 16 Members if Required:
 - Tony Le <tony.le@student.adelaide.edu.au>
 - Sam Lovat <samuel.lovat@student.adelaide.edu.au>
